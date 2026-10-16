@@ -1,3 +1,13 @@
+# DSAA2044 Kiwix Android 课程项目
+
+团队成员：[@hxu129](https://github.com/hxu129)、[@wjin027](https://github.com/wjin027)、[@Sli266](https://github.com/Sli266)。
+
+先阅读 [团队协作流程](docs/team/COLLABORATION.md)、[Sprint 1 计划与验收](docs/team/SPRINT1.md) 和 [开发与 CI 指南](docs/team/DEVELOPMENT.md)。当前交付跟踪在 [Sprint 1 Issue #1](https://github.com/wjin027/Data-science-project/issues/1)。
+
+日常流程：Issue 明确需求和验收 → 个人分支实现 → PR 关联 Issue → 两位非作者 review 与 CI → 合入 main → 下载对应 SHA 的 APK 并完成 demo。
+
+应用基线来自 Kiwix Android commit `111a92799fb17da7728ea829bb04a36c53b66d78`。保留上游源码、许可和以下项目介绍；课程贡献遵循团队指南，上游贡献遵循原 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 <a href="https://play.google.com/store/apps/details?id=org.kiwix.kiwixmobile" target="_blank" align="left">
   <img src="https://play.google.com/intl/en/badges/images/badge_new.png" alt="Get it on Google Play" height="30" />
 </a>

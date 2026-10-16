@@ -1,14 +1,29 @@
-<!--
-- Add the issue number here.
+## 解决的问题与结果
 
-- If you haven't solved the issue completely use "Linked issue #{issue_number}.
-- After solving the issue completely change it to "Fixes #{issue_number}.
--->
-Fixes #
+<!-- 说明具体问题、改动后行为和用户/开发者收益。保持一个清楚的目标。 -->
 
-<!-- Add here what changes were made in this issue and if possible provide links. -->
+## 关联 Issue / 任务
 
+<!-- 完整解决才用 Closes #实际编号；部分完成用 Refs #实际编号，并写 checklist 中哪一项。不要照抄示例编号。 -->
 
-<!-- If possible, please add relevant screenshots / GIFs -->
+## 验证与 demo
 
-**Screenshots** 
+<!-- 填写实际命令、Checks / Actions 链接、预期和实际结果。未运行或跳过的检查要明确写出。涉及界面时提供步骤及必要截图；首次 CI 要在合并后的 main 验证产物。 -->
+
+- 实际检查：
+- 结果与证据：
+- Demo / 手动验收步骤：
+- 已知限制或未验证内容：
+
+## AI 辅助与人工验证
+
+<!-- 简述实际使用的 AI 辅助（或“无”），以及作者实际阅读和验证的内容；不要声称其他成员已经批准。 -->
+
+## 合并前核对
+
+- [ ] PR 关联了实际 Issue / 任务，改动范围与需求一致。
+- [ ] 相关检查已完成，失败、跳过和限制已如实记录。
+- [ ] 适用的文档、验收标准和 demo 已更新。
+- [ ] 改动、日志及截图不含密钥或私人环境信息。
+- [ ] 已邀请作者之外的两位成员 review，并处理阻塞意见。
+- [ ] 合并时，两位非作者 review 已完成，必要 CI checks 成功。

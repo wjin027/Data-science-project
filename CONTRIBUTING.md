@@ -1,3 +1,5 @@
+> 本仓库用于 DSAA2044 课程。向课程仓库贡献前，请先阅读 [团队协作流程](docs/team/COLLABORATION.md) 和 [开发指南](docs/team/DEVELOPMENT.md)。以下保留上游 Kiwix 的贡献说明；向上游提案或提交改动属于另一个流程。
+
 # Contributing Guidelines
 
 We love improvements to our tools! There are a few key ways you can help us improve our projects:

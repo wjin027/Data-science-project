@@ -1,0 +1,64 @@
+name: Setup / task
+description: 记录环境、CI、文档和其他支持开发的任务。
+title: "[Setup] "
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请选择 assignee 和 milestone，并按内容调整 label（如 setup 或 documentation）。
+        Sprint 1 可以在一个 Issue 中维护 story 和各项 checklist，不需要为每个小步骤另建 Issue。
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标与受益者
+      description: 需要得到什么结果，谁因此能完成什么工作？Sprint 1 请使用 user-story 格式。
+      placeholder: "As a student developer, I want ..., so that ..."
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Supporting requirements
+      description: 环境、构建、交付或文档应满足的具体要求。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完成与验收标准
+      description: 写出可操作的检查和预期结果。配置文件存在或任务排队不等于有效输出。
+      placeholder: |
+        - [ ] 另一位成员可按文档完成……
+        - [ ] 执行……实际得到……，结果链接为……
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 任务、负责人和估点
+      description: 每项写一位负责人。整体和任务估点的计算方式需团队确认，不重复计分。
+      placeholder: |
+        Story points：待团队讨论（1/2/3/5/8）
+        - [ ] 配置 / 实现…… — @负责人 — 待估点
+        - [ ] 独立复现与验收…… — @负责人 — 待估点
+        - [ ] 更新操作文档与 demo…… — @负责人 — 待估点
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖与待确认事项
+      description: 包括权限、其他 PR 或明确的阻塞；没有则写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: PR、验证结果与 demo（随进展更新）
+      placeholder: |
+        关联 PR：
+        Actions / 产物链接（如适用）：
+        独立验收人员与实际结果：
+        Demo 步骤：
+        未完成项与已知限制：
