@@ -1,0 +1,328 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2026 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.utils
+
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.ResolveInfo
+import android.net.Uri
+import android.os.Build
+import androidx.activity.ComponentActivity
+import androidx.compose.material3.ExperimentalMaterial3Api
+import io.mockk.coJustRun
+import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.kiwixmobile.core.utils.dialog.AlertDialogShower
+import org.kiwix.kiwixmobile.core.utils.dialog.KiwixDialog
+import org.kiwix.sharedFunctions.MainDispatcherRule
+import org.kiwix.sharedFunctions.TestApplication
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
+import org.robolectric.android.controller.ActivityController
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowToast
+
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalMaterial3Api::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(
+  sdk = [Build.VERSION_CODES.TIRAMISU, Build.VERSION_CODES.N_MR1],
+  manifest = Config.NONE,
+  application = TestApplication::class
+)
+class ExternalLinkOpenerTest {
+  @Rule
+  @JvmField
+  val mainDispatcherRule = MainDispatcherRule()
+  private lateinit var kiwixDataStore: KiwixDataStore
+  private val alertDialogShower = AlertDialogShower()
+  private lateinit var activity: ComponentActivity
+  private lateinit var activityController: ActivityController<ComponentActivity>
+
+  @Before
+  fun setUp() {
+    kiwixDataStore = mockk()
+    activityController = Robolectric.buildActivity(ComponentActivity::class.java)
+    activity = activityController.setup().get()
+  }
+
+  @After
+  fun tearDown() {
+    activityController.pause().stop().destroy()
+  }
+
+  @Test
+  fun alertDialogShowerOpensLinkIfConfirmButtonIsClicked() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    every { kiwixDataStore.externalLinkPopup } returns flowOf(true)
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalUrl(intent)
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    val (dialog, listeners, _) = dialogData!!
+    assert(dialog == KiwixDialog.ExternalLinkPopup)
+    listeners[0].invoke()
+    // In Robolectric, we can check the next started activity
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNotNull(startedIntent)
+    assert(startedIntent.action == Intent.ACTION_VIEW)
+    assert(startedIntent.dataString == "https://github.com/")
+  }
+
+  @Test
+  fun alertDialogShowerOpensLinkIfGeoProtocolAdded() = runTest {
+    val uri = Uri.parse("geo:28.61388888888889,77.20833333333334")
+    val intent = Intent(Intent.ACTION_VIEW, uri)
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    every { kiwixDataStore.externalLinkPopup } returns flowOf(true)
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalUrl(intent)
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    val (dialog, listeners, _) = dialogData!!
+    assert(dialog == KiwixDialog.ExternalLinkPopup)
+    listeners[0].invoke()
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNotNull(startedIntent)
+    assert(startedIntent.data == uri)
+  }
+
+  @Test
+  fun alertDialogShowerDoesNoOpenLinkIfNegativeButtonIsClicked() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    every { kiwixDataStore.externalLinkPopup } returns flowOf(true)
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalUrl(intent)
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    val (dialog, listeners, _) = dialogData!!
+    assert(dialog == KiwixDialog.ExternalLinkPopup)
+    listeners[1].invoke()
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNull(startedIntent)
+  }
+
+  @Test
+  fun alertDialogShowerOpensLinkAndSavesPreferencesIfNeutralButtonIsClicked() =
+    runTest {
+      val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+      Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+        intent,
+        ResolveInfo().apply {
+          activityInfo = ActivityInfo().apply {
+            packageName = "com.example"
+            name = "ExampleActivity"
+          }
+        }
+      )
+      every { kiwixDataStore.externalLinkPopup } returns flowOf(true)
+      coJustRun { kiwixDataStore.setExternalLinkPopup(any()) }
+      val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+        initialize(activity, alertDialogShower)
+      }
+      externalLinkOpener.openExternalUrl(intent)
+      val dialogData = alertDialogShower.dialogState.value
+      assertNotNull(dialogData)
+      val (dialog, listeners, _) = dialogData!!
+      assert(dialog == KiwixDialog.ExternalLinkPopup)
+      listeners[2].invoke()
+      val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+      assertNotNull(startedIntent)
+      advanceUntilIdle()
+      coVerify {
+        kiwixDataStore.setExternalLinkPopup(false)
+      }
+    }
+
+  @Test
+  fun neutralButtonClickPersistsPreferenceWhenActivityIsPaused() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    every { kiwixDataStore.externalLinkPopup } returns flowOf(true)
+    coJustRun { kiwixDataStore.setExternalLinkPopup(any()) }
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalUrl(intent)
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    val (_, listeners, _) = dialogData!!
+    listeners[2].invoke()
+    activityController.pause()
+    advanceUntilIdle()
+    coVerify {
+      kiwixDataStore.setExternalLinkPopup(false)
+    }
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNotNull(startedIntent)
+    assert(startedIntent.dataString == "https://github.com/")
+  }
+
+  @Test
+  fun intentIsStartedIfExternalLinkPopupPreferenceIsFalse() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    every { kiwixDataStore.externalLinkPopup } returns flowOf(false)
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalUrl(intent)
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNotNull(startedIntent)
+    assert(startedIntent.dataString == "https://github.com/")
+  }
+
+  @Test
+  internal fun toastIfPackageManagerIsNotResolvable() = runTest {
+    // In Robolectric, PackageManager is not null, but we can make it return null for resolveActivity
+    // or just not add any resolves.
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    // Don't add resolve info.
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+
+    externalLinkOpener.openExternalUrl(intent)
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNull(startedIntent)
+    assert(
+      ShadowToast.getTextOfLatestToast() ==
+        activity.getString(R.string.no_reader_application_installed)
+    )
+  }
+
+  @Test
+  fun openExternalLinkWithDialog_showsDialogIfIntentIsResolvable() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    Shadows.shadowOf(activity.packageManager).addResolveInfoForIntent(
+      intent,
+      ResolveInfo().apply {
+        activityInfo = ActivityInfo().apply {
+          packageName = "com.example"
+          name = "ExampleActivity"
+        }
+      }
+    )
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalLinkWithDialog(
+      intent,
+      "donation platform"
+    )
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    val (dialog, _, _) = dialogData!!
+    assert(dialog == KiwixDialog.ExternalRedirectDialog("donation platform"))
+  }
+
+  @Test
+  fun openExternalLinkWithDialog_showsToastIfIntentIsNotResolvable() = runTest {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/"))
+    // No resolve info.
+    val externalLinkOpener = ExternalLinkOpener(kiwixDataStore).apply {
+      initialize(activity, alertDialogShower)
+    }
+    externalLinkOpener.openExternalLinkWithDialog(
+      intent,
+      "donation platform"
+    )
+    val startedIntent = Shadows.shadowOf(activity).nextStartedActivity
+    assertNull(startedIntent)
+    val dialogData = alertDialogShower.dialogState.value
+    assertNull(dialogData)
+    assert(
+      ShadowToast.getTextOfLatestToast() ==
+        activity.getString(R.string.no_reader_application_installed)
+    )
+  }
+
+  @Test
+  fun testDialogButtonTextDoesNotWrap() {
+    val longText = "This is a very long button text"
+    val dialog = KiwixDialog.ExternalRedirectDialog(longText)
+    alertDialogShower.show(dialog, uri = Uri.parse("https://example.com"))
+
+    val dialogData = alertDialogShower.dialogState.value
+    assertNotNull(dialogData)
+    assert(dialogData!!.first == dialog)
+  }
+}

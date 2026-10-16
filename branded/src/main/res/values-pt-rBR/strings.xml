@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Eduardo Addad de Oliveira
+* Eduardoaddad
+* Leosls
+-->
+<resources>
+  <string name="retry">Atualizar</string>
+  <string name="invalid_installation">Instalação inválida. Faça o download do ZIM.\nCertifique-se de que o WiFi esteja ativado e que você tenha espaço de armazenamento suficiente.</string>
+</resources>

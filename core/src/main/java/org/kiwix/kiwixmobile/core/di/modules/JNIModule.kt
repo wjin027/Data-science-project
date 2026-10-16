@@ -1,0 +1,76 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.core.di.modules
+
+import android.content.Context
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import org.kiwix.kiwixmobile.core.LibkiwixBookFactory
+import org.kiwix.libkiwix.Book
+import org.kiwix.libkiwix.JNIKiwix
+import org.kiwix.libkiwix.Library
+import org.kiwix.libkiwix.Manager
+import javax.inject.Named
+import javax.inject.Singleton
+
+@InstallIn(SingletonComponent::class)
+@Module
+class JNIModule {
+  @Provides @Singleton
+  fun providesJNIKiwix(@ApplicationContext context: Context): JNIKiwix = JNIKiwix(context)
+
+  @Provides
+  @Singleton
+  @Named(BOOKMARK_LIBRARY)
+  fun provideBookmarkLibrary(): Library = Library()
+
+  @Provides
+  @Singleton
+  @Named(BOOKMARK_MANAGER)
+  fun providesBookmarkManager(
+    @Named(BOOKMARK_LIBRARY) library: Library
+  ): Manager = Manager(library)
+
+  @Provides
+  @Singleton
+  @Named(LOCAL_BOOKS_LIBRARY)
+  fun provideLocalBooksLibrary(): Library = Library()
+
+  @Provides
+  @Singleton
+  @Named(LOCAL_BOOKS_MANAGER)
+  fun providesLocalBooksManager(
+    @Named(LOCAL_BOOKS_LIBRARY) library: Library
+  ): Manager = Manager(library)
+
+  /**
+   * We are not making this singleton because we need multiple objects of this.
+   */
+  @Provides
+  fun provideBookFactory(): LibkiwixBookFactory = object : LibkiwixBookFactory {
+    override fun create(): Book = Book()
+  }
+}
+
+const val BOOKMARK_LIBRARY = "bookmarkLibrary"
+const val BOOKMARK_MANAGER = "bookmarkManager"
+const val LOCAL_BOOKS_LIBRARY = "localBooksLibrary"
+const val LOCAL_BOOKS_MANAGER = "localBooksManager"

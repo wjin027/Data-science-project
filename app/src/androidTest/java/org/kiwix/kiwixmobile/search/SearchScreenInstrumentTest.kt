@@ -1,0 +1,356 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.search
+
+import android.os.Build
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.hilt.navigation.HiltViewModelFactory
+import androidx.lifecycle.ViewModelProvider
+import androidx.test.internal.runner.junit4.statement.UiThreadStatement
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import okhttp3.Request
+import okhttp3.ResponseBody
+import org.junit.After
+import org.junit.Assume
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.extensions.closeKeyboard
+import org.kiwix.kiwixmobile.core.search.viewmodel.Action
+import org.kiwix.kiwixmobile.core.search.viewmodel.SearchViewModel
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.getOkkHttpClientForTesting
+import org.kiwix.kiwixmobile.testutils.TestUtils.getZimFileFromResourceFolder
+import org.kiwix.kiwixmobile.testutils.TestUtils.testFlakyView
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilTimeout
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URI
+
+@HiltAndroidTest
+class SearchScreenInstrumentTest : BaseActivityTest() {
+  private val rayCharlesZimFileUrl =
+    "https://dev.kiwix.org/kiwix-android/test/wikipedia_en_ray_charles_maxi_2023-12.zim"
+
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createComposeRule()
+
+  private lateinit var kiwixMainActivity: KiwixMainActivity
+  private lateinit var downloadingZimFile: File
+  private lateinit var testZimFile: File
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity()
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun searchScreenSimple() {
+    Assume.assumeTrue(Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA)
+    activityScenario.onActivity {
+      kiwixMainActivity = it
+      kiwixMainActivity.navigate(KiwixDestination.Library.route)
+    }
+    testZimFile = getZimFileFromResourceFolder(context, "testzim.zim")
+    openKiwixReaderScreenWithFile(testZimFile)
+    search { checkZimFileSearchSuccessful(composeTestRule) }
+    openSearchWithQuery("Android", testZimFile)
+    search {
+      clickOnSearchItemInSearchList(composeTestRule)
+      checkZimFileSearchSuccessful(composeTestRule)
+    }
+
+    openSearchWithQuery(zimFile = testZimFile)
+    search {
+      // test with fast typing/deleting
+      searchWithFrequentlyTypedWords(searchUnitTestingQuery, composeTestRule = composeTestRule)
+      assertSearchSuccessful(searchUnitTestResult, composeTestRule)
+      deleteSearchedQueryFrequently(
+        searchUnitTestingQuery,
+        uiDevice,
+        composeTestRule = composeTestRule
+      )
+
+      // test with a short delay typing/deleting to
+      // properly test the cancelling of previously searching task
+      searchWithFrequentlyTypedWords(searchUnitTestingQuery, 50, composeTestRule)
+      assertSearchSuccessful(searchUnitTestResult, composeTestRule)
+      deleteSearchedQueryFrequently(searchUnitTestingQuery, uiDevice, 50, composeTestRule)
+
+      // test with a long delay typing/deleting to
+      // properly execute the search query letter by letter
+      searchWithFrequentlyTypedWords(searchUnitTestingQuery, 300, composeTestRule)
+      assertSearchSuccessful(searchUnitTestResult, composeTestRule)
+      deleteSearchedQueryFrequently(searchUnitTestingQuery, uiDevice, 300, composeTestRule)
+      // to close the keyboard
+      kiwixMainActivity.currentFocus?.closeKeyboard()
+      // go to reader screen
+      pressBack()
+    }
+
+    UiThreadStatement.runOnUiThread { kiwixMainActivity.navigate(KiwixDestination.Library.route) }
+    testFlakyView({
+      // test with a large ZIM file to properly test the scenario
+      downloadingZimFile = getDownloadingZimFile()
+      getOkkHttpClientForTesting().newCall(downloadRequest()).execute().use { response ->
+        if (response.isSuccessful) {
+          response.body?.let { responseBody ->
+            writeZimFileData(responseBody, downloadingZimFile)
+          }
+        } else {
+          throw RuntimeException(
+            "Download Failed. Error: ${response.message}\n" +
+              " Status Code: ${response.code}"
+          )
+        }
+      }
+    })
+    openKiwixReaderScreenWithFile(downloadingZimFile)
+    search { checkZimFileSearchSuccessful(composeTestRule) }
+    openSearchWithQuery(zimFile = downloadingZimFile)
+    search {
+      // test with fast typing/deleting
+      searchWithFrequentlyTypedWords(
+        searchQueryForDownloadedZimFile,
+        composeTestRule = composeTestRule
+      )
+      assertSearchSuccessful(searchResultForDownloadedZimFile, composeTestRule)
+      deleteSearchedQueryFrequently(
+        searchQueryForDownloadedZimFile,
+        uiDevice,
+        composeTestRule = composeTestRule
+      )
+
+      // test with a short delay typing/deleting to
+      // properly test the cancelling of previously searching task
+      searchWithFrequentlyTypedWords(searchQueryForDownloadedZimFile, 50, composeTestRule)
+      assertSearchSuccessful(searchResultForDownloadedZimFile, composeTestRule)
+      deleteSearchedQueryFrequently(searchQueryForDownloadedZimFile, uiDevice, 50, composeTestRule)
+
+      // test with a long delay typing/deleting to
+      // properly execute the search query letter by letter
+      searchWithFrequentlyTypedWords(searchQueryForDownloadedZimFile, 300, composeTestRule)
+      assertSearchSuccessful(searchResultForDownloadedZimFile, composeTestRule)
+      deleteSearchedQueryFrequently(searchQueryForDownloadedZimFile, uiDevice, 300, composeTestRule)
+      // open the reader screen for next test case.
+      clickOnNavigationIcon(composeTestRule)
+    }
+
+    // Added test for checking the crash scenario where the application was crashing when we
+    // frequently searched for article, and clicked on the searched item.
+    search {
+      // test by searching 10 article and clicking on them
+      searchAndClickOnArticle(searchQueryForDownloadedZimFile, composeTestRule)
+      searchAndClickOnArticle("A Song", composeTestRule)
+      searchAndClickOnArticle("The Ra", composeTestRule)
+      searchAndClickOnArticle("The Ge", composeTestRule)
+      searchAndClickOnArticle("Wish", composeTestRule)
+      searchAndClickOnArticle("WIFI", composeTestRule)
+      searchAndClickOnArticle("Woman", composeTestRule)
+      searchAndClickOnArticle("Big Ba", composeTestRule)
+      searchAndClickOnArticle("My Wor", composeTestRule)
+      searchAndClickOnArticle("100", composeTestRule)
+      assertArticleLoaded()
+    }
+    removeTemporaryZimFilesToFreeUpDeviceStorage()
+  }
+
+  @Test
+  fun testConcurrencyOfSearch() =
+    runBlocking {
+      val searchTerms =
+        listOf(
+          "A Song",
+          "The Ra",
+          "The Ge",
+          "Wish",
+          "WIFI",
+          "Woman",
+          "Big Ba",
+          "My Wor",
+          "100"
+        )
+      activityScenario.onActivity {
+        kiwixMainActivity = it
+        kiwixMainActivity.navigate(KiwixDestination.Library.route)
+      }
+      composeTestRule.waitForIdle()
+      testFlakyView({
+        downloadingZimFile = getDownloadingZimFile()
+        getOkkHttpClientForTesting().newCall(downloadRequest()).execute().use { response ->
+          if (response.isSuccessful) {
+            response.body?.let { responseBody ->
+              writeZimFileData(responseBody, downloadingZimFile)
+            }
+          } else {
+            throw RuntimeException(
+              "Download Failed. Error: ${response.message}\n" +
+                " Status Code: ${response.code}"
+            )
+          }
+        }
+      })
+      openKiwixReaderScreenWithFile(downloadingZimFile)
+      composeTestRule.waitForIdle()
+      search { checkZimFileSearchSuccessful(composeTestRule) }
+      openSearchWithQuery(searchTerms[0], downloadingZimFile)
+      // wait for searchScreen to become visible on screen.
+      delay(2000)
+      val searchBackStackEntry =
+        kiwixMainActivity.navController.getBackStackEntry(KiwixDestination.Search.route)
+      val searchViewModel = ViewModelProvider(
+        searchBackStackEntry,
+        HiltViewModelFactory(kiwixMainActivity, searchBackStackEntry)
+      )[SearchViewModel::class.java]
+
+      for (i in 1..100) {
+        // This will execute the render method 100 times frequently.
+        val searchTerm = searchTerms[i % searchTerms.size]
+        searchViewModel.actions.tryEmit(Action.Filter(searchTerm))
+      }
+      for (i in 1..100) {
+        // this will execute the render method 100 times with 100MS delay.
+        delay(100)
+        val searchTerm = searchTerms[i % searchTerms.size]
+        searchViewModel.actions.tryEmit(Action.Filter(searchTerm))
+      }
+      for (i in 1..100) {
+        // this will execute the render method 100 times with 200MS delay.
+        delay(200)
+        val searchTerm = searchTerms[i % searchTerms.size]
+        searchViewModel.actions.tryEmit(Action.Filter(searchTerm))
+      }
+      for (i in 1..100) {
+        // this will execute the render method 100 times with 200MS delay.
+        delay(300)
+        val searchTerm = searchTerms[i % searchTerms.size]
+        searchViewModel.actions.tryEmit(Action.Filter(searchTerm))
+      }
+    }
+
+  @Test
+  fun testSearchWithExtraSpaces() {
+    activityScenario.onActivity {
+      kiwixMainActivity = it
+      kiwixMainActivity.navigate(KiwixDestination.Library.route)
+    }
+    testZimFile = getZimFileFromResourceFolder(context, "testzim.zim")
+    openKiwixReaderScreenWithFile(testZimFile)
+    search { checkZimFileSearchSuccessful(composeTestRule) }
+    openSearchWithQuery("Android ", testZimFile)
+    search {
+      clickOnSearchItemInSearchList(composeTestRule)
+      checkZimFileSearchSuccessful(composeTestRule)
+    }
+    openSearchWithQuery("   Unit test   ", testZimFile)
+    search {
+      clickOnSearchItemInSearchList(composeTestRule)
+      checkZimFileSearchSuccessful(composeTestRule)
+    }
+  }
+
+  private fun removeTemporaryZimFilesToFreeUpDeviceStorage() {
+    testZimFile.delete()
+  }
+
+  private fun openKiwixReaderScreenWithFile(zimFile: File) {
+    composeTestRule.runOnUiThread {
+      kiwixMainActivity.openZimFromFilePath(zimFile.absolutePath)
+    }
+    composeTestRule.apply {
+      waitForIdle()
+      waitUntilTimeout()
+    }
+  }
+
+  private fun writeZimFileData(responseBody: ResponseBody, file: File) {
+    FileOutputStream(file).use { outputStream ->
+      responseBody.byteStream().use { inputStream ->
+        val buffer = ByteArray(4096)
+        var bytesRead: Int
+        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+          outputStream.write(buffer, 0, bytesRead)
+        }
+        outputStream.flush()
+      }
+    }
+  }
+
+  private fun downloadRequest() =
+    Request
+      .Builder()
+      .url(URI.create(rayCharlesZimFileUrl).toURL())
+      .build()
+
+  private fun openSearchWithQuery(query: String = "", zimFile: File) {
+    UiThreadStatement.runOnUiThread {
+      if (zimFile.canRead()) {
+        kiwixMainActivity.openSearch(searchString = query)
+      } else {
+        throw RuntimeException(
+          "File $zimFile is not readable." +
+            " Original File $zimFile is readable = ${zimFile.canRead()}" +
+            " Size ${zimFile.length()}"
+        )
+      }
+    }
+  }
+
+  private fun getDownloadingZimFile(): File {
+    val zimFile = File(context.cacheDir, "ray_charles.zim")
+    if (zimFile.exists()) zimFile.delete()
+    zimFile.createNewFile()
+    return zimFile
+  }
+
+  @After
+  fun finish() {
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+    context.cacheDir?.let {
+      it.listFiles()?.let { files ->
+        for (child in files) {
+          child.delete()
+        }
+      }
+      it.delete()
+    }
+  }
+}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Bjankuloski06
+-->
+<resources>
+  <string name="file_system_does_not_support_4gb">Вашиот систем не поддржува податотеки преку 4 ГБ.</string>
+  <string name="detecting_file_system">Утврдувам дали системот може да создава податотеки од 4 ГБ</string>
+  <string name="cannot_open_file">Не можев да ја отворам податотеката\nВидете дали можете да ја најдете вашата Библиотека</string>
+  <string name="send_files_title">Испраќање на податотеки</string>
+  <string name="receive_files_title">Примање на податотеки</string>
+  <string name="no_app_found_to_open">Не пронајдов прилог за избирање на ZIM-податотека!</string>
+  <string name="select_zim_file">Изберете ZIM-податотека за читање</string>
+  <string name="swipe_down_to_scan_storage">Повлечете надолу за да отчитате нови книги…</string>
+  <string name="auto_detect_books">Автоматско пронаоѓање на вашите книги</string>
+  <string name="auto_detect_books_description">При првото пуштање ќе бидете прашани дали прилогот можа да го отчитува вашиот склад. Ако се согласите, ние автоматски ќе пронаоѓаме ZIM-податотеки без да треба да ги додавате рачно.</string>
+  <string name="select_category">Изберете категорија</string>
+  <string name="no_category_available">Нема категории на располагање</string>
+  <string name="your_selected_category">Избрана категорија:</string>
+  <string name="other_categories">Други категории:</string>
+  <string name="all_categories">Сите категории</string>
+  <string name="select_category_content_description">Ако ја изберете оваа категорија, тогаш најгоре предност ќе имаат преземливите книги на тој јазик.</string>
+</resources>

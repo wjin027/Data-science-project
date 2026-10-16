@@ -1,0 +1,172 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.utils.files
+
+import android.content.ContentResolver
+import android.content.Context
+import android.database.Cursor
+import android.os.Environment
+import android.provider.MediaStore.MediaColumns
+import app.cash.turbine.test
+import eu.mhutti1.utils.storage.StorageDevice
+import eu.mhutti1.utils.storage.StorageDeviceUtils
+import io.mockk.clearAllMocks
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
+import kotlinx.coroutines.test.runTest
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.RegisterExtension
+import org.junit.jupiter.api.io.TempDir
+import org.kiwix.sharedFunctions.MainDispatcherRule
+import java.io.File
+
+class FileSearchTest {
+  @TempDir
+  lateinit var tempDir: File
+
+  private val context: Context = mockk()
+  private lateinit var fileSearch: FileSearch
+
+  private val externalStorageDirectory: File = mockk()
+  private val contentResolver: ContentResolver = mockk()
+  private val storageDevice: StorageDevice = mockk()
+  private val scanningProgressListener: ScanningProgressListener = mockk()
+
+  @RegisterExtension
+  @JvmField
+  val mainDispatcherRule = MainDispatcherRule()
+
+  @BeforeEach
+  fun init() {
+    clearAllMocks()
+    mockkStatic(StorageDeviceUtils::class)
+    mockkStatic(Environment::class)
+    every { Environment.getExternalStorageDirectory() } returns externalStorageDirectory
+    every { externalStorageDirectory.absolutePath } returns "/externalStorageDirectory"
+    every { context.contentResolver } returns contentResolver
+    coEvery {
+      StorageDeviceUtils.getReadableStorage(context, mainDispatcherRule.dispatcher)
+    } returns arrayListOf(storageDevice)
+    every { storageDevice.name } returns "/deviceDir"
+    fileSearch = FileSearch(context, mainDispatcherRule.dispatcher)
+  }
+
+  @AfterEach
+  fun teardown() {
+    unmockkAll()
+  }
+
+  @Nested
+  inner class FileSystem {
+    @Test
+    fun `scan of directory that doesn't exist returns nothing`() = runTest {
+      every { contentResolver.query(any(), any(), any(), any(), any()) } returns null
+      fileSearch.scan(scanningProgressListener).test {
+        assertThat(awaitItem()).isEmpty()
+        awaitComplete()
+      }
+    }
+
+    @Test
+    fun `scan of directory that has files returns files`() = runTest {
+      val zimFile = File(tempDir, "fileToFind.zim").apply { createNewFile() }
+      val zimaaFile = File(tempDir, "fileToFind2.zimaa").apply { createNewFile() }
+      File(tempDir, "willNotFind.txt").apply { createNewFile() }
+      every { contentResolver.query(any(), any(), any(), any(), any()) } returns null
+      every { storageDevice.name } returns tempDir.absolutePath
+      fileSearch.scan(scanningProgressListener).test {
+        assertThat(awaitItem()).containsExactlyInAnyOrder(zimFile, zimaaFile)
+        awaitComplete()
+      }
+    }
+
+    @Test
+    fun `scan of directory recursively traverses filesystem`() = runTest {
+      val subDir = File(tempDir, "dir").apply { mkdirs() }
+      val zimFile = File(subDir, "fileToFind.zim").apply { createNewFile() }
+      every { contentResolver.query(any(), any(), any(), any(), any()) } returns null
+      every { storageDevice.name } returns tempDir.absolutePath
+      fileSearch.scan(scanningProgressListener).test {
+        assertThat(awaitItem()[0]).isEqualTo(zimFile)
+        awaitComplete()
+      }
+    }
+  }
+
+  @Nested
+  inner class MediaStore {
+    @Test
+    fun `scan media store, if files are readable they are returned`() = runTest {
+      val fileToFind = File(tempDir, "fileToFind_media.zim").apply { createNewFile() }
+      expectFromMediaStore(fileToFind)
+      fileSearch.scan(scanningProgressListener).test {
+        assertThat(awaitItem()).isEqualTo(listOf(fileToFind))
+        awaitComplete()
+      }
+    }
+
+    @Test
+    fun `scan media store, if files are not readable they are not returned`() = runTest {
+      val unreadableFile = File(tempDir, "fileToFind_unreadable.zim").apply { createNewFile() }
+      expectFromMediaStore(unreadableFile)
+      unreadableFile.delete()
+      fileSearch.scan(scanningProgressListener).test {
+        assertThat(awaitItem()).isEmpty()
+        awaitComplete()
+      }
+    }
+
+    @Test
+    fun `scan media store, if files are in trash folder they are not returned even if readable`() =
+      runTest {
+        val trashDir = File(tempDir, ".Trash").apply { mkdirs() }
+        val trashFile = File(trashDir, "trash_file.zim").apply { createNewFile() }
+
+        expectFromMediaStore(trashFile)
+        fileSearch.scan(scanningProgressListener).test {
+          assertThat(awaitItem()).isEmpty()
+          awaitComplete()
+        }
+      }
+
+    private fun expectFromMediaStore(fileToFind: File) {
+      val cursor = mockk<Cursor>()
+      every {
+        contentResolver.query(
+          any(),
+          arrayOf(MediaColumns.DATA),
+          MediaColumns.DATA + " like ? or " + MediaColumns.DATA + " like ? ",
+          arrayOf("%." + "zim", "%." + "zimaa"),
+          null
+        )
+      } returns cursor
+      every { cursor.moveToNext() } returnsMany listOf(true, false)
+      every { cursor.columnNames } returns arrayOf(MediaColumns.DATA)
+      every { cursor.getColumnIndex(MediaColumns.DATA) } returns 0
+      every { cursor.getString(0) } returns fileToFind.absolutePath
+    }
+  }
+}

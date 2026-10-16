@@ -1,0 +1,99 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.extensions
+
+import android.app.Activity
+import android.content.Intent
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.Observer
+import androidx.navigation.NavOptions
+import org.kiwix.kiwixmobile.core.main.CoreMainActivity
+
+object ActivityExtensions {
+  private val Activity.coreMainActivity: CoreMainActivity get() = this as CoreMainActivity
+
+  inline fun <reified T : Activity> Activity.start(
+    noinline intentFunc: (Intent.() -> Unit)? = null
+  ) {
+    startActivity(intent<T> { intentFunc?.invoke(this) })
+  }
+
+  inline fun <reified T : Activity> Activity.intent(
+    noinline intentFunc: (Intent.() -> Unit)? = null
+  ) =
+    Intent(this, T::class.java).apply { intentFunc?.invoke(this) }
+
+  fun Activity.navigate(route: String, navOptions: NavOptions? = null) {
+    coreMainActivity.navigate(route, navOptions)
+  }
+
+  fun Activity.popNavigationBackstack() {
+    coreMainActivity.navController.popBackStack()
+  }
+
+  fun <T> Activity.getObservableNavigationResult(key: String = "result") =
+    if (coreMainActivity.isNavControllerInitialized) {
+      coreMainActivity.navController.currentBackStackEntry?.savedStateHandle
+        ?.getLiveData<T>(key)
+    } else {
+      null
+    }
+
+  fun <T> Activity.observeNavigationResult(
+    key: String,
+    owner: LifecycleOwner,
+    observer: Observer<T>
+  ) {
+    getObservableNavigationResult<T>(key)?.observe(owner) {
+      observer.onChanged(it)
+      coreMainActivity.safelyConsumeObservable(key)
+    }
+  }
+
+  fun Activity.safelyConsumeObservable(key: String = "result") =
+    runCatching {
+      if (coreMainActivity.isNavControllerInitialized) {
+        coreMainActivity.navController.currentBackStackEntry?.savedStateHandle?.remove<Any?>(key)
+      } else {
+        // do nothing.
+      }
+    }.onFailure {
+      // TODO This will be resolved automatically after migrating to Compose
+      // (once the ViewModel replaces this logic). Re-test after the migration is complete.
+      it.printStackTrace()
+    }
+
+  fun <T> Activity.setNavigationResult(result: T, key: String = "result") {
+    if (coreMainActivity.isNavControllerInitialized) {
+      coreMainActivity.navController.previousBackStackEntry?.savedStateHandle?.set(
+        key,
+        result
+      )
+    }
+  }
+
+  fun <T> Activity.setNavigationResultOnCurrent(result: T, key: String = "result") {
+    if (coreMainActivity.isNavControllerInitialized) {
+      coreMainActivity.navController.currentBackStackEntry?.savedStateHandle?.set(
+        key,
+        result
+      )
+    }
+  }
+}

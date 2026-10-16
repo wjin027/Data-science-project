@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Eleassar
+-->
+<resources>
+  <string name="file_system_does_not_support_4gb">Vaš datotečni sistem ne podpira datotek, večjih od 4 GB</string>
+  <string name="detecting_file_system">Zaznavanje, ali lahko datotečni sistem ustvarja datoteke velikosti 4 GB</string>
+  <string name="cannot_open_file">Datoteke ni bilo mogoče odpreti\nPoskusite to datoteko poiskati v svoji knjižnici</string>
+  <string name="send_files_title">Pošlji datoteke</string>
+  <string name="receive_files_title">Prejmi datoteke</string>
+  <string name="no_app_found_to_open">Ni najdene aplikacije za izbiro datoteke ZIM!</string>
+  <string name="select_zim_file">Izberite datoteko ZIM za branje</string>
+  <string name="swipe_down_to_scan_storage">Povlecite navzdol, da poiščete nove knjige v napravi …</string>
+  <string name="auto_detect_books">Samodejno zaznavanje knjig</string>
+  <string name="auto_detect_books_description">Ob prvem zagonu boste vprašani, ali lahko aplikacija pregleda vaš pomnilnik. Če to dovolite, bomo samodejno zaznali vaše datoteke ZIM, ne da bi jih bilo treba ročno dodajati.</string>
+  <string name="select_category">Izberi kategorijo</string>
+  <string name="no_category_available">Kategorije niso na voljo</string>
+  <string name="your_selected_category">Izbrana kategorija:</string>
+  <string name="other_categories">Druge kategorije:</string>
+  <string name="all_categories">Vse kategorije</string>
+  <string name="select_category_content_description">Če boste izbrali to kategorijo, boste na vrhu prednostno prikazali knjige, ki jih je mogoče prenesti v tem jeziku.</string>
+</resources>

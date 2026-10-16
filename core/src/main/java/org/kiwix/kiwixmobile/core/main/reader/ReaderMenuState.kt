@@ -1,0 +1,382 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2025 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.main.reader
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.page.SEARCH_ICON_TESTING_TAG
+import org.kiwix.kiwixmobile.core.ui.models.ActionMenuItem
+import org.kiwix.kiwixmobile.core.ui.models.IconItem
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.EXTRA_SMALL_ROUND_SHAPE_SIZE
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.MATERIAL_MINIMUM_HEIGHT_AND_WIDTH
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.TAB_SWITCHER_TEXT_SIZE
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.TWELVE_DP
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.TWENTY_FOUR_DP
+import org.kiwix.kiwixmobile.core.utils.ComposeDimens.TWO_DP
+
+const val READ_ALOUD_MENU_ITEM_TESTING_TAG = "readAloudMenuItemTestingTag"
+const val TAKE_NOTE_MENU_ITEM_TESTING_TAG = "takeNoteMenuItemTestingTag"
+const val RANDOM_PAGE_MENU_ITEM_TESTING_TAG = "randomPageMenuItemTestingTag"
+const val SHARE_ARTICLE_MENU_ITEM_TESTING_TAG = "shareArticleMenuItemTestingTag"
+const val TAB_MENU_ITEM_TESTING_TAG = "tabMenuItemTestingTag"
+const val TABS_SIZE_TEXT_TESTING_TAG = "tabsSizeTextTestingTag"
+const val ADD_TO_HOME_SCREEN_MENU_ITEM_TESTING_TAG = "addToHomeScreenMenuItemTestingTag"
+const val FIND_IN_PAGE_MENU_ITEM_TESTING_TAG = "findInPageTestingTag"
+const val CLOSE_ALL_TABS_MENU_ITEM_TESTING_TAG = "closeAllTabsMenuItemTestingTag"
+
+@Stable
+class ReaderMenuState(
+  private val menuClickListener: MenuClickListener,
+  isUrlValidInitially: Boolean,
+  private val disableReadAloud: Boolean = false,
+  private val disableTabs: Boolean = false,
+  private val disableSearch: Boolean = false,
+  private val isPinShortcutSupported: Boolean = false
+) {
+  interface MenuClickListener {
+    fun onTabMenuClicked()
+    fun onHomeMenuClicked()
+    fun onAddNoteMenuClicked()
+    fun onShareMenuClicked()
+    fun onRandomPageMenuClicked()
+    fun onReadAloudMenuClicked()
+    fun onSearchMenuClickedMenuClicked()
+    fun onAddToHomeScreenMenuClicked()
+    fun onFindInPageMenuClicked()
+    fun onCloseAllTabsClicked()
+  }
+
+  val menuItems = mutableStateListOf<ActionMenuItem>()
+
+  private val menuItemVisibility = mutableMapOf<MenuItemType, Boolean>().apply {
+    put(MenuItemType.Search, true)
+    put(MenuItemType.NewTab, false)
+    put(MenuItemType.TabSwitcher, true)
+    put(MenuItemType.Share, true)
+    put(MenuItemType.AddNote, true)
+    put(MenuItemType.RandomPage, true)
+    put(MenuItemType.ReadAloud, true)
+    put(MenuItemType.AddToHomeScreen, true)
+    put(MenuItemType.FindInPage, true)
+    put(MenuItemType.CloseAllTabs, false)
+  }
+
+  private var isReadingAloud by mutableStateOf(false)
+
+  private var webViewCount by mutableIntStateOf(0)
+  private var urlIsValid by mutableStateOf(false)
+
+  fun updateTabIcon(count: Int) {
+    webViewCount = count
+    updateMenuItems()
+  }
+
+  init {
+    showWebViewOptions(isUrlValidInitially)
+  }
+
+  fun showWebViewOptions(valid: Boolean) {
+    urlIsValid = valid
+    setVisibility(
+      false,
+      MenuItemType.NewTab,
+      MenuItemType.CloseAllTabs
+    )
+    setVisibility(
+      urlIsValid,
+      MenuItemType.RandomPage,
+      MenuItemType.Search,
+      MenuItemType.ReadAloud,
+      MenuItemType.Share,
+      MenuItemType.AddNote,
+      MenuItemType.TabSwitcher,
+      MenuItemType.AddToHomeScreen,
+      MenuItemType.FindInPage
+    )
+  }
+
+  fun onFileOpened(urlIsValid: Boolean) {
+    showWebViewOptions(urlIsValid)
+  }
+
+  fun onTextToSpeechStarted() {
+    isReadingAloud = true
+    updateMenuItems()
+  }
+
+  fun onTextToSpeechStopped() {
+    isReadingAloud = false
+    updateMenuItems()
+  }
+
+  fun hideBookSpecificMenuItems() {
+    setVisibility(
+      false,
+      MenuItemType.Search,
+      MenuItemType.TabSwitcher,
+      MenuItemType.Share,
+      MenuItemType.RandomPage,
+      MenuItemType.AddNote,
+      MenuItemType.ReadAloud,
+      MenuItemType.AddToHomeScreen,
+      MenuItemType.FindInPage
+    )
+  }
+
+  fun showBookSpecificMenuItems() {
+    setVisibility(
+      true,
+      MenuItemType.Search,
+      MenuItemType.TabSwitcher,
+      MenuItemType.Share,
+      MenuItemType.RandomPage,
+      MenuItemType.AddNote,
+      MenuItemType.ReadAloud,
+      MenuItemType.AddToHomeScreen,
+      MenuItemType.FindInPage
+    )
+  }
+
+  fun showTabSwitcherOptions() {
+    setVisibility(
+      true,
+      MenuItemType.NewTab,
+      MenuItemType.CloseAllTabs
+    )
+    setVisibility(
+      false,
+      MenuItemType.Search,
+      MenuItemType.RandomPage,
+      MenuItemType.ReadAloud,
+      MenuItemType.Share,
+      MenuItemType.AddNote,
+      MenuItemType.AddToHomeScreen,
+      MenuItemType.FindInPage
+    )
+  }
+
+  fun hideTabSwitcher() {
+    setVisibility(
+      false,
+      MenuItemType.NewTab,
+      MenuItemType.CloseAllTabs
+    )
+    updateMenuItems()
+  }
+
+  private fun updateMenuItems() {
+    menuItems.clear()
+    addSearchMenuItem()
+    addNewTabMenuItem()
+    addTabMenuItem()
+    addAddToHomeScreenMenuItem()
+    addReaderMenuItems()
+    addCloseAllTabsMenuItem()
+  }
+
+  private fun addSearchMenuItem() {
+    if (menuItemVisibility[MenuItemType.Search] == true && !disableSearch && urlIsValid) {
+      menuItems += ActionMenuItem(
+        icon = IconItem.Drawable(R.drawable.action_search),
+        contentDescription = R.string.search_label,
+        onClick = { menuClickListener.onSearchMenuClickedMenuClicked() },
+        isInOverflow = false,
+        testingTag = SEARCH_ICON_TESTING_TAG
+      )
+    }
+  }
+
+  private fun addNewTabMenuItem() {
+    if (menuItemVisibility[MenuItemType.NewTab] == true) {
+      menuItems += ActionMenuItem(
+        icon = IconItem.Drawable(R.drawable.ic_add_blue_24dp),
+        contentDescription = R.string.search_open_in_new_tab,
+        onClick = { menuClickListener.onHomeMenuClicked() },
+        isInOverflow = false,
+        testingTag = NEW_TAB_BUTTON_TESTING_TAG
+      )
+    }
+  }
+
+  private fun addTabMenuItem() {
+    if (!disableTabs && urlIsValid && webViewCount > 0) {
+      val tabLabel = if (webViewCount > 99) ":D" else "$webViewCount"
+      menuItems += ActionMenuItem(
+        icon = null,
+        contentDescription = R.string.switch_tabs,
+        onClick = { menuClickListener.onTabMenuClicked() },
+        isInOverflow = false,
+        iconButtonText = tabLabel,
+        testingTag = TAB_MENU_ITEM_TESTING_TAG,
+        customView = { TabSwitcherBadge(tabLabel = tabLabel) }
+      )
+    }
+  }
+
+  @Composable
+  fun TabSwitcherBadge(tabLabel: String, modifier: Modifier = Modifier) {
+    Box(
+      modifier = modifier
+        .size(MATERIAL_MINIMUM_HEIGHT_AND_WIDTH)
+        .padding(TWELVE_DP),
+      contentAlignment = Alignment.Center
+    ) {
+      Box(
+        modifier = Modifier
+          .clip(RoundedCornerShape(EXTRA_SMALL_ROUND_SHAPE_SIZE))
+          .background(MaterialTheme.colorScheme.onPrimary)
+          .border(
+            TWO_DP,
+            MaterialTheme.colorScheme.onBackground,
+            RoundedCornerShape(EXTRA_SMALL_ROUND_SHAPE_SIZE)
+          )
+          .size(TWENTY_FOUR_DP),
+        contentAlignment = Alignment.Center
+      ) {
+        Text(
+          text = tabLabel,
+          color = MaterialTheme.colorScheme.onBackground,
+          fontWeight = FontWeight.Bold,
+          fontSize = TAB_SWITCHER_TEXT_SIZE,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.testTag(TABS_SIZE_TEXT_TESTING_TAG)
+        )
+      }
+    }
+  }
+
+  private fun addAddToHomeScreenMenuItem() {
+    if (menuItemVisibility[MenuItemType.AddToHomeScreen] == true &&
+      urlIsValid &&
+      isPinShortcutSupported
+    ) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.menu_add_to_homescreen,
+        onClick = { menuClickListener.onAddToHomeScreenMenuClicked() },
+        testingTag = ADD_TO_HOME_SCREEN_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+  }
+
+  private fun addReaderMenuItems() {
+    if (menuItemVisibility[MenuItemType.FindInPage] == true) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.menu_search_in_text,
+        onClick = { menuClickListener.onFindInPageMenuClicked() },
+        testingTag = FIND_IN_PAGE_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+
+    if (menuItemVisibility[MenuItemType.Share] == true) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.share_article,
+        onClick = { menuClickListener.onShareMenuClicked() },
+        testingTag = SHARE_ARTICLE_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+
+    if (menuItemVisibility[MenuItemType.AddNote] == true) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.take_notes,
+        onClick = { menuClickListener.onAddNoteMenuClicked() },
+        testingTag = TAKE_NOTE_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+
+    if (menuItemVisibility[MenuItemType.RandomPage] == true) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.menu_random_page,
+        onClick = { menuClickListener.onRandomPageMenuClicked() },
+        testingTag = RANDOM_PAGE_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+
+    if (menuItemVisibility[MenuItemType.ReadAloud] == true && !disableReadAloud) {
+      menuItems += ActionMenuItem(
+        contentDescription = if (isReadingAloud) R.string.menu_read_aloud_stop else R.string.menu_read_aloud,
+        onClick = {
+          menuClickListener.onReadAloudMenuClicked()
+        },
+        testingTag = READ_ALOUD_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+  }
+
+  private fun addCloseAllTabsMenuItem() {
+    if (menuItemVisibility[MenuItemType.CloseAllTabs] == true && webViewCount > 0) {
+      menuItems += ActionMenuItem(
+        contentDescription = R.string.close_all_tabs,
+        onClick = { menuClickListener.onCloseAllTabsClicked() },
+        testingTag = CLOSE_ALL_TABS_MENU_ITEM_TESTING_TAG,
+        isInOverflow = true
+      )
+    }
+  }
+
+  private fun setVisibility(visible: Boolean, vararg types: MenuItemType) {
+    types.forEach {
+      if (it == MenuItemType.Search && disableSearch) {
+        menuItemVisibility[it] = false
+      } else {
+        menuItemVisibility[it] = visible
+      }
+    }
+    updateMenuItems()
+  }
+}
+
+enum class MenuItemType {
+  Search,
+  NewTab,
+  TabSwitcher,
+  Share,
+  AddNote,
+  RandomPage,
+  ReadAloud,
+  AddToHomeScreen,
+  FindInPage,
+  CloseAllTabs
+}

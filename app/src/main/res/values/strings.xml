@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <string name="file_system_does_not_support_4gb">Your file system doesn’t support files over 4GB</string>
+  <string name="detecting_file_system">Detecting if file system can create 4GB files</string>
+  <string name="cannot_open_file">Failed to open file\nPlease try looking for this file in your Library</string>
+  <string name="send_files_title">Send Files</string>
+  <string name="receive_files_title">Receive Files</string>
+  <string name="no_app_found_to_open">No app found to select ZIM file!</string>
+  <string name="select_zim_file">Select ZIM file to read</string>
+  <string name="swipe_down_to_scan_storage">Swipe down to scan your device for new books…</string>
+  <string name="auto_detect_books">Auto-detect your books</string>
+  <string name="auto_detect_books_description">On first launch, you will be asked if the app can scan your storage. If you allow it, we will automatically detect your ZIM files without needing to add them manually.</string>
+  <string name="select_category">Select category</string>
+  <string name="no_category_available" tools:keep="@string/no_category_available">No categories available</string>
+  <string name="your_selected_category" tools:keep="@string/your_selected_category">Selected category:</string>
+  <string name="other_categories" tools:keep="@string/other_categories">Other categories:</string>
+  <string name="all_categories" tools:keep="@string/all_categories">All categories</string>
+  <string name="select_category_content_description">Selecting this category will prioritize displaying downloadable books in that language at the top.</string>
+  <string name="save_categories" tools:keep="@string/save_categories">Save categories</string>
+  <string name="your_selected_categories" tools:keep="@string/your_selected_categories">Selected categories:</string>
+  <plurals name="and_more" tools:keep="@plurals/and_more">
+    <item quantity="one">and %d more</item>
+    <item quantity="other">and %d more</item>
+  </plurals>
+  <string name="your_categories" tools:keep="@string/your_categories">Selected categories:</string>
+  <string name="your_category" tools:keep="@string/your_category">Selected category: %s</string>
+</resources>

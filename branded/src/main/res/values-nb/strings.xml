@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Jon Harald Søby
+* TorgeirS
+-->
+<resources>
+  <string name="retry">Prøv igjen</string>
+  <string name="invalid_installation">Ugyldig installering. Vennligst last ned ZIM.\n Sørg for at WiFi er aktivert og at du har nok lagringsplass</string>
+</resources>

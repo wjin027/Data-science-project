@@ -1,0 +1,191 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.page.bookmarks
+
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import io.mockk.mockk
+import io.objectbox.BoxStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.dao.DownloadRoomDao
+import org.kiwix.kiwixmobile.core.dao.LibkiwixBookOnDisk
+import org.kiwix.kiwixmobile.core.dao.LibkiwixBookmarks
+import org.kiwix.kiwixmobile.core.page.bookmark.models.LibkiwixBookmarkItem
+import org.kiwix.kiwixmobile.core.reader.ZimFileReader
+import org.kiwix.kiwixmobile.core.utils.StorageDeviceProvider
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.migration.di.module.DatabaseModule
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.libkiwix.Library
+import org.kiwix.libkiwix.Manager
+import java.io.File
+import javax.inject.Provider
+
+@HiltAndroidTest
+class ImportBookmarkTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  private var boxStore: BoxStore? = null
+  private val library = Library()
+  private val manager = Manager(library)
+  private lateinit var libkiwixBookOnDisk: LibkiwixBookOnDisk
+  private lateinit var libkiwixBookmarks: LibkiwixBookmarks
+
+  private val bookmarkXmlData =
+    """
+    <bookmarks>
+      <bookmark>
+        <book>
+          <id>1f88ab6f-c265-b3ff-8f49-b7f442950380</id>
+          <title>Alpine Linux Wiki</title>
+          <name>alpinelinux_en_all</name>
+          <flavour>maxi</flavour>
+          <language>eng</language>
+          <date>2023-01-18</date>
+        </book>
+        <title>Main Page</title>
+        <url>https://kiwix.app/A/Main_Page</url>
+      </bookmark>
+      <bookmark>
+        <book>
+          <id>1f88ab6f-c265-b3ff-8f49-b7f442950380</id>
+          <title>Alpine Linux Wiki</title>
+          <name>alpinelinux_en_all</name>
+          <flavour>maxi</flavour>
+          <language>eng</language>
+          <date>2023-01-18</date>
+        </book>
+        <title>Installation</title>
+        <url>https://kiwix.app/A/Installation</url>
+      </bookmark>
+      <bookmark>
+        <book>
+          <id>04bf4329-9bfb-3681-03e2-cfae7b047f24</id>
+          <title>Ray Charles</title>
+          <name>wikipedia_en_ray_charles</name>
+          <flavour>maxi</flavour>
+          <language>eng</language>
+          <date>2024-03-17</date>
+        </book>
+        <title>Wikipedia</title>
+        <url>https://kiwix.app/A/index</url>
+      </bookmark>
+    </bookmarks>
+    """.trimIndent()
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity()
+    boxStore = DatabaseModule.boxStore
+    val storageDeviceProvider = StorageDeviceProvider(context, kiwixDataStore, Dispatchers.IO)
+    val zimFileReaderFactory = ZimFileReader.Factory.Impl(Dispatchers.IO)
+    libkiwixBookOnDisk =
+      LibkiwixBookOnDisk(
+        library,
+        manager,
+        kiwixDataStore,
+        storageDeviceProvider,
+        zimFileReaderFactory,
+        Provider<DownloadRoomDao> { mockk(relaxed = true) },
+        Dispatchers.IO
+      )
+    libkiwixBookmarks =
+      LibkiwixBookmarks(
+        library,
+        manager,
+        kiwixDataStore,
+        libkiwixBookOnDisk,
+        null,
+        Dispatchers.IO
+      )
+  }
+
+  @Test
+  fun importBookmark() =
+    runBlocking {
+      // clear the bookmarks to perform tes case properly.
+      clearBookmarks()
+      // test with empty data file
+      var tempBookmarkFile = getTemporaryBookmarkFile(true)
+      importBookmarks(tempBookmarkFile)
+      var actualDataAfterImporting = libkiwixBookmarks.bookmarks().first()
+      assertEquals(0, actualDataAfterImporting.size)
+
+      // import the bookmark
+      tempBookmarkFile = getTemporaryBookmarkFile()
+      importBookmarks(tempBookmarkFile)
+      actualDataAfterImporting = libkiwixBookmarks.bookmarks().first()
+      assertEquals(3, actualDataAfterImporting.size)
+      assertEquals(actualDataAfterImporting[0].title, "Main Page")
+      assertEquals(actualDataAfterImporting[0].url, "https://kiwix.app/A/Main_Page")
+      assertEquals(actualDataAfterImporting[0].zimId, "1f88ab6f-c265-b3ff-8f49-b7f442950380")
+
+      // import duplicate bookmarks
+      importBookmarks(tempBookmarkFile)
+      actualDataAfterImporting = libkiwixBookmarks.bookmarks().first()
+      assertEquals(3, actualDataAfterImporting.size)
+
+      // delete the temp file
+      if (tempBookmarkFile.exists()) tempBookmarkFile.delete()
+    }
+
+  private fun importBookmarks(tempBookmarkFile: File) {
+    activityScenario.onActivity {
+      runBlocking {
+        libkiwixBookmarks.importBookmarks(tempBookmarkFile)
+      }
+    }
+  }
+
+  private suspend fun clearBookmarks() {
+    // delete bookmarks for testing other edge cases
+    libkiwixBookmarks.deleteBookmarks(
+      libkiwixBookmarks
+        .bookmarks()
+        .first() as List<LibkiwixBookmarkItem>
+    )
+  }
+
+  private fun getTemporaryBookmarkFile(isWithEmptyData: Boolean = false): File =
+    File(context.externalCacheDir, "bookmark.xml").apply {
+      if (exists()) delete()
+      createNewFile()
+
+      if (!isWithEmptyData) {
+        // Write the XML data to the temp file
+        writeText(bookmarkXmlData)
+      }
+    }
+}

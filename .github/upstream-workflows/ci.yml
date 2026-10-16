@@ -1,0 +1,469 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: 720
+
+jobs:
+
+  automated-tests:
+    name: Automated tests
+    strategy:
+      matrix:
+        api-level: [ 25, 30, 33, 34, 35, 36 ]
+        target: [ default ]
+      fail-fast: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          large-packages: false
+          swap-storage: false
+
+      - name: Code checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+
+      - name: Create unit test coverage
+        if: ${{ matrix.api-level==30 }}
+        run: ./gradlew testDebugUnitTest testCustomexampleDebugUnitTest
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          force-avd-creation: false
+          sdcard-path-or-size: 1024M
+          heap-size: 1024M
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: |
+            trap 'killall -INT crashpad_handler 2>/dev/null || true' EXIT
+            echo "Generated AVD snapshot for caching."
+
+      - name: Create instrumentation coverage
+        uses: ./.github/actions/android-emulator-runner
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          script: bash contrib/instrumentation.sh
+
+      - name: Upload screenshot result
+        uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: ${{ matrix.api-level }}
+          path: screencap.png
+
+      - name: Run benchmarks
+        if: ${{ matrix.api-level==30 }}
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000 -Dorg.gradle.internal.network.retry.max.attempts=6 -Dorg.gradle.internal.network.retry.initial.backOff=2000"
+        with:
+          api-level: 30
+          target: ${{ matrix.target }}
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 3072M
+          heap-size: 1024M
+          cores: 4
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          disable-animations: true
+          force-avd-creation: false
+          script: |
+            trap 'killall -INT crashpad_handler 2>/dev/null || true' EXIT
+            ./gradlew :benchmark:connectedBenchmarkAndroidTest
+
+      - name: Upload coverage to Codecov
+        if: ${{ matrix.api-level==30 }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload Coverage to GH-Actions
+        uses: actions/upload-artifact@v6
+        if: ${{ matrix.api-level==30 }}
+        with:
+          name: Tests Coverage Report
+          path: |
+            **/reports/
+
+  automated-tests-playstore:
+    name: Automated tests for PlayStore variant
+    strategy:
+      matrix:
+        api-level: [ 25, 30, 33, 34, 35, 36 ]
+        target: [ default ]
+      fail-fast: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          large-packages: false
+          swap-storage: false
+
+      - name: Code checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          force-avd-creation: false
+          sdcard-path-or-size: 1024M
+          heap-size: 1024M
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: |
+            trap 'killall -INT crashpad_handler 2>/dev/null || true' EXIT
+            echo "Generated AVD snapshot for caching."
+
+      - name: Create instrumentation coverage for PlayStore variant
+        uses: ./.github/actions/android-emulator-runner
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          script: bash contrib/instrumentation-release.sh
+
+  automated-tests-branded-apps:
+    name: Automated tests for Branded app
+    strategy:
+      matrix:
+        api-level: [ 25, 30, 33, 34, 35, 36 ]
+        target: [ default ]
+      fail-fast: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          large-packages: false
+          swap-storage: false
+
+      - name: Code checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          force-avd-creation: false
+          sdcard-path-or-size: 1024M
+          heap-size: 1024M
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: |
+            trap 'killall -INT crashpad_handler 2>/dev/null || true' EXIT
+            echo "Generated AVD snapshot for caching."
+
+      - name: Test branded app
+        uses: ./.github/actions/android-emulator-runner
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_2
+          script: bash contrib/instrumentation-brandedapps.sh
+
+  automated-tests-on-tablet:
+    name: Automated tests on Tablet
+    strategy:
+      matrix:
+        api-level: [ 25, 30, 33, 34, 35, 36 ]
+        target: [ default ]
+      fail-fast: true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          large-packages: false
+          swap-storage: false
+
+      - name: Code checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'gradle'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api-level }}-${{ matrix.target }}
+
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_c
+          force-avd-creation: false
+          sdcard-path-or-size: 1024M
+          heap-size: 1024M
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
+          script: |
+            trap 'killall -INT crashpad_handler 2>/dev/null || true' EXIT
+            echo "Generated AVD snapshot for caching."
+
+      - name: File Opening test on Tablet
+        uses: ./.github/actions/android-emulator-runner
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: ${{ (matrix.api-level >= 30) && 'x86_64' || 'x86' }}
+          profile: pixel_c
+          script: bash contrib/instrumentation-file-opening-on-tablet.sh
+
+  code-formatting-job:
+    name: Code Formatting
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: 'gradle'
+
+      - name: Static Analysis
+        run: ./gradlew ktlintCheck
+
+      - name: Upload ktlint Reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ktlint-report
+          path: '**/build/reports/ktlint'
+
+  detekt:
+    name: Detekt
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: 'gradle'
+
+      - name: Static Analysis
+        run: ./gradlew detektDebug detektCustomExampleDebug
+      - name: Upload Lint Reports
+        uses: actions/upload-artifact@v6
+        if: ${{ always() }}
+        with:
+          name: detekt-report
+          path: '**/build/reports/detekt'
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: 'gradle'
+
+      - name: Run Debug Lint
+        run: ./gradlew app:lintDebug branded:lintCustomexampleDebug
+
+      - name: Upload Lint Reports
+        uses: actions/upload-artifact@v6
+        if: ${{ always() }}
+        with:
+          name: lint-report
+          path: '**/build/reports/lint-results-*'
+
+  assemble:
+    name: Assemble
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27d
+          link-to-sdk: true
+
+      - name: Build all configurations
+        env:
+          APK_BUILD: "true"
+        run: ./gradlew assemble
+
+      - name: Upload APK as Artifacts
+        uses: actions/upload-artifact@v6
+        if: ${{ always() }}
+        with:
+          name: kiwix-android
+          path: |
+            **/*.apk

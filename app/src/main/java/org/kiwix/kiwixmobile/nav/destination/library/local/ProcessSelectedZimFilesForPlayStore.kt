@@ -1,0 +1,377 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2025 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.nav.destination.library.local
+
+import android.content.Context
+import android.net.Uri
+import androidx.annotation.VisibleForTesting
+import androidx.compose.material3.SnackbarHostState
+import androidx.documentfile.provider.DocumentFile
+import dagger.hilt.android.qualifiers.ApplicationContext
+import eu.mhutti1.utils.storage.Bytes
+import eu.mhutti1.utils.storage.StorageDevice
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.kiwix.kiwixmobile.R
+import org.kiwix.kiwixmobile.core.R.string
+import org.kiwix.kiwixmobile.core.di.IoDispatcher
+import org.kiwix.kiwixmobile.core.extensions.runSafelyInLifecycleScope
+import org.kiwix.kiwixmobile.core.extensions.snack
+import org.kiwix.kiwixmobile.core.extensions.toast
+import org.kiwix.kiwixmobile.core.settings.StorageCalculator
+import org.kiwix.kiwixmobile.core.ui.components.ONE
+import org.kiwix.kiwixmobile.core.utils.EXTERNAL_SELECT_POSITION
+import org.kiwix.kiwixmobile.core.utils.INTERNAL_SELECT_POSITION
+import org.kiwix.kiwixmobile.core.utils.StorageDeviceProvider
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.kiwixmobile.core.utils.dialog.AlertDialogShower
+import org.kiwix.kiwixmobile.core.utils.dialog.KiwixDialog
+import org.kiwix.kiwixmobile.core.utils.files.FileUtils
+import org.kiwix.kiwixmobile.core.utils.files.FileUtils.isSplittedZimFile
+import org.kiwix.kiwixmobile.nav.destination.library.CopyMoveFileHandler
+import org.kiwix.kiwixmobile.nav.destination.library.StorageSelectDialogConfig
+import java.io.File
+import javax.inject.Inject
+
+/**
+ * Handles the process of validating, copying/moving, and opening
+ * selected ZIM files for the Play Store variant of the app.
+ *
+ * This class ensures:
+ * - File validity is checked before copying/moving.
+ * - User-friendly error handling (snackbar, dialogs, toasts).
+ * - Sequential handling of multiple ZIM files.
+ *
+ * Storage space availability is validated by [CopyMoveFileHandler] right before
+ * a file is actually copied/moved, so it is not checked again here.
+ */
+@Suppress("LongParameterList")
+class ProcessSelectedZimFilesForPlayStore @Inject constructor(
+  private val kiwixDataStore: KiwixDataStore,
+  @param:ApplicationContext private val context: Context,
+  private val copyMoveFileHandler: CopyMoveFileHandler,
+  private val storageCalculator: StorageCalculator,
+  private val storageDeviceProvider: StorageDeviceProvider,
+  @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher
+) : CopyMoveFileHandler.FileCopyMoveCallback {
+  private var snackBarHostState: SnackbarHostState? = null
+  private var selectedZimFileCallback: SelectedZimFileCallback? = null
+  private var lifecycleScope: CoroutineScope? = null
+  private var alertDialogShower: AlertDialogShower? = null
+  private var isSingleFileSelected = false
+
+  /**
+   * Manages the selected action by user when processing the multiple files.
+   */
+  private var multipleFilesProcessAction: MultipleFilesProcessAction? = null
+  private val selectedZimFileUriList: MutableList<Uri> = mutableListOf()
+
+  /**
+   * Initializes the handler with required dependencies and callbacks.
+   * Must be called before using this class.
+   */
+  fun init(
+    lifecycleScope: CoroutineScope,
+    alertDialogShower: AlertDialogShower,
+    snackBarHostState: SnackbarHostState,
+    selectedZimFileCallback: SelectedZimFileCallback
+  ) {
+    this.lifecycleScope = lifecycleScope
+    this.selectedZimFileCallback = selectedZimFileCallback
+    this.alertDialogShower = alertDialogShower
+    copyMoveFileHandler.apply {
+      setFileCopyMoveCallback(this@ProcessSelectedZimFilesForPlayStore)
+      setLifeCycleScope(lifecycleScope)
+      setAlertDialogShower(alertDialogShower)
+    }
+    this.snackBarHostState = snackBarHostState
+  }
+
+  private fun requireLifecycleScope(): CoroutineScope =
+    requireNotNull(lifecycleScope) {
+      "Lifecycle scope is not set. Check the ProcessSelectedZimFilesForPlayStore.init method"
+    }
+
+  /**
+   * Returns whether this handler can process URIs in Play Store builds
+   * (restricted to Android 11+ due to storage changes).
+   */
+  suspend fun canHandleUris(): Boolean = kiwixDataStore.isPlayStoreBuildWithAndroid11OrAbove()
+
+  /** Stores the selected ZIM file URIs internally for processing. */
+  private fun storeSelectedFiles(uris: List<Uri>) {
+    selectedZimFileUriList.clear()
+    selectedZimFileUriList.addAll(uris)
+  }
+
+  /**
+   * Processes one or multiple selected files.
+   */
+  suspend fun processSelectedFiles(uris: List<Uri>, isAfterRetry: Boolean = false) {
+    storeSelectedFiles(uris)
+    if (uris.size == 1 && !isAfterRetry) {
+      isSingleFileSelected = true
+      processSingleFile(uris.first())
+    } else {
+      isSingleFileSelected = false
+      processMultipleFiles(uris)
+    }
+  }
+
+  /**
+   * Processes a single file: validates it and asks user to move/copy to public directory.
+   * If invalid:
+   * - From multiple selection → show error dialog but continue with other files.
+   * - From single selection → show toast and stop.
+   */
+  private suspend fun processSingleFile(
+    uri: Uri,
+    isFromMultipleFiles: Boolean = false
+  ) {
+    val documentFile = when (uri.scheme) {
+      "file" -> DocumentFile.fromFile(File("$uri"))
+      else -> {
+        DocumentFile.fromSingleUri(context, uri)
+      }
+    }
+
+    val fileName = documentFile?.name
+    if (!isValidZimFile(fileName)) {
+      handleInvalidFile(uri, fileName, isFromMultipleFiles)
+      return
+    }
+
+    // If the file is already in one of the app's public directories,
+    // open it directly without copying/moving.
+    val existingFile = getExistingFileInAppDirectory(documentFile)
+    if (existingFile != null) {
+      validateAndOpenZimInReader(existingFile)
+      return
+    }
+
+    copyMoveFileHandler.showMoveFileToPublicDirectoryDialog(
+      storageDeviceProvider.getWritableStorage(),
+      uri,
+      documentFile,
+      // pass if fileName is null then we will validate it after copying/moving
+      fileName == null,
+      multipleFilesProcessAction,
+      isSingleFileSelected
+    )
+  }
+
+  /**
+   * Handles invalid ZIM file scenarios based on selection type.
+   */
+  private fun handleInvalidFile(
+    uri: Uri,
+    fileName: String?,
+    isFromMultipleFiles: Boolean
+  ) {
+    val errorMessage =
+      context.getString(string.error_file_invalid, fileName ?: uri.toString())
+    if (isFromMultipleFiles) {
+      selectedZimFileCallback?.showFileCopyMoveErrorDialog(errorMessage) {
+        // Continue with next file
+        processSelectedFiles(selectedZimFileUriList.drop(ONE), isAfterRetry = true)
+      }
+    } else {
+      context.toast(errorMessage)
+    }
+  }
+
+  /**
+   * Processes multiple files sequentially by delegating each file
+   * to [processSingleFile]. When one finishes, the next is processed.
+   */
+  private suspend fun processMultipleFiles(uris: List<Uri>) {
+    // We process ZIM file copy/move operations one by one.
+    // Since copying/moving runs on an IO thread, it is not synchronized.
+    // Therefore, we observe the callbacks and continue with the next operation accordingly.
+    if (uris.isEmpty()) {
+      // All files processed successfully.
+      multipleFilesProcessAction = null
+      context.toast(context.getString(string.your_selected_files_added_to_library))
+      return
+    }
+    val uri = uris.first()
+    processSingleFile(uri, true)
+  }
+
+  /** Validates whether the given file is a valid ZIM or a split ZIM file. */
+  private fun isValidZimFile(fileName: String?): Boolean =
+    fileName?.let {
+      FileUtils.isValidZimFile(it) || isSplittedZimFile(it)
+    } ?: false
+
+  private suspend fun findExistingFileInAppDirectories(fileName: String, fileSize: Long): File? =
+    withContext(ioDispatcher) {
+      storageDeviceProvider.getAppSpecificPublicDirs()
+        .firstNotNullOfOrNull { dir -> findMatchingFile(dir, fileName, fileSize) }
+    }
+
+  private fun findMatchingFile(dir: File, fileName: String, fileSize: Long): File? {
+    val rootFile = File(dir, fileName)
+    if (rootFile.exists() && rootFile.length() == fileSize) {
+      return rootFile
+    }
+    return dir.walkTopDown()
+      .onEnter { !it.name.startsWith(".") }
+      .firstOrNull { it.isFile && it.name == fileName && it.length() == fileSize }
+  }
+
+  /**
+   * Checks if a file with the same name and size already exists in one of the
+   * app's public app-specific directories. Returns the existing [File] if found,
+   * null otherwise. This avoids unnecessary copy/move operations for files the
+   * user has already placed in one of these directories.
+   */
+  @VisibleForTesting
+  suspend fun getExistingFileInAppDirectory(documentFile: DocumentFile?): File? {
+    val fileName = documentFile?.name ?: return null
+    return findExistingFileInAppDirectories(fileName, documentFile.length())
+  }
+
+  /** Shows a snackbar suggesting the user to change storage. */
+  private fun showStorageSelectionSnackBar(message: String) {
+    snackBarHostState?.snack(
+      message = message,
+      actionLabel = context.getString(string.change_storage),
+      lifecycleScope = requireLifecycleScope(),
+      actionClick = {
+        requireLifecycleScope().runSafelyInLifecycleScope {
+          val storageDeviceList = storageDeviceProvider.getWritableStorage()
+          val dialogConfig = StorageSelectDialogConfig(
+            storageDeviceList = storageDeviceList,
+            title = context.getString(string.pref_storage),
+            shouldShowCheckboxSelected = true,
+            kiwixDataStore = kiwixDataStore,
+            storageCalculator = storageCalculator,
+            onSelectAction = ::storeDeviceInPreferences
+          )
+          showStorageSelectionDialog(dialogConfig)
+        }
+      }
+    )
+  }
+
+  /**
+   * Stores the newly selected storage path in preferences
+   * and retries copying/moving the ZIM file.
+   */
+  private fun storeDeviceInPreferences(storageDevice: StorageDevice) {
+    requireLifecycleScope().runSafelyInLifecycleScope {
+      kiwixDataStore.apply {
+        setSelectedStorage(kiwixDataStore.getPublicDirectoryPath(storageDevice.name))
+        setSelectedStoragePosition(
+          if (storageDevice.isInternal) {
+            INTERNAL_SELECT_POSITION
+          } else {
+            EXTERNAL_SELECT_POSITION
+          }
+        )
+      }
+      // after selecting the storage try to copy/move the zim file.
+      copyMoveFileHandler.copyMoveZIMFileInSelectedStorage(storageDevice)
+    }
+  }
+
+  fun dispose() {
+    copyMoveFileHandler.dispose()
+    lifecycleScope = null
+    selectedZimFileCallback = null
+    multipleFilesProcessAction = null
+  }
+
+  override fun onFileCopied(file: File) {
+    validateAndOpenZimInReader(file)
+  }
+
+  override fun onFileMoved(file: File) {
+    validateAndOpenZimInReader(file)
+  }
+
+  override fun insufficientSpaceInStorage(availableSpace: Long) {
+    val message =
+      """
+      ${context.getString(string.move_no_space)}
+      ${context.getString(string.space_available)} ${Bytes(availableSpace).humanReadable}
+      """.trimIndent()
+
+    showStorageSelectionSnackBar(message)
+  }
+
+  override fun filesystemDoesNotSupportedCopyMoveFilesOver4GB() {
+    showStorageSelectionSnackBar(context.getString(R.string.file_system_does_not_support_4gb))
+  }
+
+  override fun showStorageSelectionDialog(dialogConfig: StorageSelectDialogConfig) {
+    selectedZimFileCallback?.showStorageSelectionDialog(dialogConfig)
+  }
+
+  override fun onError(errorMessage: String) {
+    if (isSingleFileSelected) {
+      multipleFilesProcessAction = null
+      context.toast(errorMessage)
+    } else {
+      selectedZimFileCallback?.showFileCopyMoveErrorDialog(errorMessage) {
+        // Continue with remaining files after error
+        processSelectedFiles(selectedZimFileUriList.drop(ONE), true)
+      }
+    }
+  }
+
+  override fun onMultipleFilesProcessSelection(multipleFilesProcessAction: MultipleFilesProcessAction) {
+    this.multipleFilesProcessAction = multipleFilesProcessAction
+  }
+
+  /**
+   * Validates if copied/moved file is usable and navigates to reader.
+   * If multiple files are selected, continues with next file in queue.
+   */
+  private fun validateAndOpenZimInReader(file: File) {
+    when {
+      isSingleFileSelected -> {
+        // For single file it works like before.
+        if (isSplittedZimFile(file.path)) {
+          showWarningDialogForSplittedZimFile()
+        } else {
+          selectedZimFileCallback?.navigateToReaderScreen(file = file)
+        }
+        multipleFilesProcessAction = null
+      }
+
+      else -> requireLifecycleScope().launch {
+        selectedZimFileCallback?.addBookToLibkiwixBookOnDisk(file)
+        processSelectedFiles(selectedZimFileUriList.drop(ONE), true)
+      }
+    }
+  }
+
+  private fun showWarningDialogForSplittedZimFile() {
+    alertDialogShower?.show(KiwixDialog.ShowWarningAboutSplittedZimFile)
+  }
+}
+
+sealed class MultipleFilesProcessAction {
+  object Copy : MultipleFilesProcessAction()
+  object Move : MultipleFilesProcessAction()
+}

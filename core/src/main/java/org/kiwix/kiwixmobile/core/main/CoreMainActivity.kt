@@ -1,0 +1,592 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.core.main
+
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.os.Build
+import android.os.Bundle
+import android.os.Process
+import android.view.ActionMode
+import android.view.MenuItem
+import androidx.annotation.DrawableRes
+import androidx.appcompat.app.ActionBarDrawerToggle
+import androidx.appcompat.content.res.AppCompatResources
+import androidx.compose.material3.BottomAppBarScrollBehavior
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.IconCompat
+import androidx.core.net.toUri
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.NavDirections
+import androidx.navigation.NavHostController
+import androidx.navigation.NavOptions
+import androidx.navigation.NavOptionsBuilder
+import androidx.navigation.navOptions
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import org.kiwix.kiwixmobile.core.BuildConfig
+import org.kiwix.kiwixmobile.core.CoreApp
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.base.BackPressActivityExtensions
+import org.kiwix.kiwixmobile.core.base.BaseActivity
+import org.kiwix.kiwixmobile.core.dao.DownloadRoomDao
+import org.kiwix.kiwixmobile.core.di.IoDispatcher
+import org.kiwix.kiwixmobile.core.downloader.downloadManager.DOWNLOAD_TIMEOUT_LIMIT_REACH_NOTIFICATION_ID
+import org.kiwix.kiwixmobile.core.downloader.downloadManager.DownloadMonitorServiceManager
+import org.kiwix.kiwixmobile.core.error.ErrorActivity
+import org.kiwix.kiwixmobile.core.extensions.ActivityExtensions.setNavigationResultOnCurrent
+import org.kiwix.kiwixmobile.core.extensions.browserIntent
+import org.kiwix.kiwixmobile.core.main.reader.helper.intent.ReaderIntentManager
+import org.kiwix.kiwixmobile.core.main.reader.helper.selection.WebViewSelectionActionMode
+import org.kiwix.kiwixmobile.core.reader.ZimReaderContainer
+import org.kiwix.kiwixmobile.core.reader.ZimReaderSource
+import org.kiwix.kiwixmobile.core.utils.ExternalLinkOpener
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.kiwixmobile.core.utils.dialog.AlertDialogShower
+import org.kiwix.kiwixmobile.core.utils.dialog.RateDialogHandler
+import javax.inject.Inject
+import kotlin.system.exitProcess
+
+const val KIWIX_SUPPORT_URL = "https://donate.kiwix.org"
+const val PAGE_URL_KEY = "pageUrl"
+const val SHOULD_OPEN_IN_NEW_TAB = "shouldOpenInNewTab"
+const val ZIM_FILE_URI_KEY = "zimFileUri"
+const val KIWIX_INTERNAL_ERROR = 10
+const val ACTION_NEW_TAB = "NEW_TAB"
+const val NEW_TAB_SHORTCUT_ID = "new_tab_shortcut"
+private const val ADAPTIVE_ICON_SIZE_DP = 108
+private const val ADAPTIVE_ICON_INSET_DP = 36
+
+// Screen names for compose based navigation.
+const val READER_SCREEN = "readerScreen"
+const val LOCAL_LIBRARY_SCREEN = "localLibraryScreen"
+const val DOWNLOAD_SCREEN = "downloadsScreen"
+const val BOOKMARK_SCREEN = "bookmarkScreen"
+const val NOTES_SCREEN = "notesScreen"
+const val INTRO_SCREEN = "introScreen"
+const val HISTORY_SCREEN = "historyScreen"
+const val LANGUAGE_SCREEN = "languageScreen"
+const val ZIM_HOST_SCREEN = "zimHostScreen"
+const val HELP_SCREEN = "helpScreen"
+const val SETTINGS_SCREEN = "settingsScreen"
+const val SEARCH_SCREEN = "searchScreen"
+const val LOCAL_FILE_TRANSFER_SCREEN = "localFileTransferScreen"
+
+// Zim host deep link for opening the ZimHost screen from notification.
+const val ZIM_HOST_DEEP_LINK_SCHEME = "kiwix"
+const val ZIM_HOST_NAV_DEEP_LINK = "$ZIM_HOST_DEEP_LINK_SCHEME://zimhost"
+
+// Left drawer items testing tag.
+const val LEFT_DRAWER_BOOKMARK_ITEM_TESTING_TAG = "leftDrawerBookmarkItemTestingTag"
+const val LEFT_DRAWER_HISTORY_ITEM_TESTING_TAG = "leftDrawerHistoryItemTestingTag"
+const val LEFT_DRAWER_NOTES_ITEM_TESTING_TAG = "leftDrawerNotesItemTestingTag"
+const val LEFT_DRAWER_SETTINGS_ITEM_TESTING_TAG = "leftDrawerSettingsItemTestingTag"
+const val LEFT_DRAWER_SUPPORT_ITEM_TESTING_TAG = "leftDrawerSupportItemTestingTag"
+const val LEFT_DRAWER_HELP_ITEM_TESTING_TAG = "leftDrawerHelpItemTestingTag"
+const val LEFT_DRAWER_ZIM_HOST_ITEM_TESTING_TAG = "leftDrawerZimHostItemTestingTag"
+const val LEFT_DRAWER_ABOUT_APP_ITEM_TESTING_TAG = "leftDrawerAboutAppItemTestingTag"
+
+abstract class CoreMainActivity : BaseActivity() {
+  abstract val searchScreenRoute: String
+
+  @Inject lateinit var alertDialogShower: AlertDialogShower
+
+  @Inject lateinit var externalLinkOpener: ExternalLinkOpener
+
+  @Inject lateinit var rateDialogHandler: RateDialogHandler
+  private var drawerToggle: ActionBarDrawerToggle? = null
+
+  @Inject lateinit var zimReaderContainer: ZimReaderContainer
+
+  @Inject lateinit var kiwixDataStore: KiwixDataStore
+
+  @Inject
+  @IoDispatcher
+  lateinit var ioDispatcher: CoroutineDispatcher
+
+  @Inject
+  lateinit var downloadRoomDao: DownloadRoomDao
+
+  /**
+   * Stores the pending intent for reader screen.
+   */
+  @Inject
+  lateinit var readerIntentManager: ReaderIntentManager
+
+  @Inject
+  lateinit var downloadMonitorServiceManager: DownloadMonitorServiceManager
+
+  private var selectionActionModeListener: WebViewSelectionActionMode? = null
+
+  /**
+   * We have migrated the UI in compose, so providing the compose based navigation to activity
+   * is responsibility of child activities such as KiwixMainActivity, and CustomMainActivity.
+   */
+  lateinit var navController: NavHostController
+  val isNavControllerInitialized: Boolean
+    get() = ::navController.isInitialized
+
+  /**
+   * For managing the leftDrawer.
+   */
+  lateinit var leftDrawerState: DrawerState
+
+  /**
+   * The compose coroutine scope for calling the compose based UI elements in coroutine scope.
+   * Such as opening/closing leftDrawer.
+   */
+  lateinit var uiCoroutineScope: CoroutineScope
+  lateinit var snackBarHostState: SnackbarHostState
+
+  /**
+   * Managing the leftDrawerMenu in compose way so that when app's language changed
+   * it will update the text in selected language.
+   */
+  protected val leftDrawerMenu = mutableStateListOf<DrawerMenuGroup>()
+
+  /**
+   * Manages the enabling/disabling the left drawer
+   */
+  val enableLeftDrawer = mutableStateOf(true)
+
+  /**
+   * For managing the back press of compose screens.
+   */
+  val customBackHandler = mutableStateOf<(() -> BackPressActivityExtensions.Super)?>(null)
+
+  /**
+   * For managing the the showing/hiding the bottomAppBar when scrolling.
+   */
+  @OptIn(ExperimentalMaterial3Api::class)
+  var bottomAppBarScrollBehaviour: BottomAppBarScrollBehavior? = null
+
+  var activityResultForwarder: ((Int, Int, Intent?) -> Unit)? = null
+  abstract val bookmarksScreenRoute: String
+  abstract val settingsScreenRoute: String
+  abstract val historyScreenRoute: String
+  abstract val notesScreenRoute: String
+  abstract val helpScreenRoute: String
+  abstract val readerScreenRoute: String
+  abstract val topLevelDestinationsRoute: Set<String>
+  abstract val appName: String
+
+  /**
+   * Manages the visibility of the left drawer by tracking its state.
+   * In Compose, when the screen rotates and the screen width is above 600dp,
+   * the drawerState is automatically set to open. This causes unexpected behavior.
+   * To ensure a smooth user experience, we save the drawer state in a boolean so
+   * that it survives configuration changes and is not affected by Compose’s
+   * default implementation.
+   */
+  private var wasLeftDrawerOpen = false
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    val splashScreen = installSplashScreen()
+    super.onCreate(savedInstanceState)
+    splashScreen.setKeepOnScreenCondition {
+      !CoreApp.instance.themeConfig.isThemeLoaded.value
+    }
+    if (!BuildConfig.DEBUG) {
+      val appContext = applicationContext
+      // Save the existing uncaught exception handler (usually set by Android).
+      val existingHandler = Thread.getDefaultUncaughtExceptionHandler()
+      Thread.setDefaultUncaughtExceptionHandler { paramThread: Thread?, paramThrowable: Throwable? ->
+        val intent = Intent(appContext, ErrorActivity::class.java)
+        intent.putExtra(ErrorActivity.EXCEPTION_KEY, paramThrowable)
+        val extras = Bundle()
+        extras.putSerializable(ErrorActivity.EXCEPTION_KEY, paramThrowable)
+        intent.putExtras(extras)
+        intent.addFlags(FLAG_ACTIVITY_NEW_TASK)
+        appContext.startActivity(intent)
+        finish()
+        if (paramThread != null && paramThrowable != null) {
+          // Delegate to the system/default handler (ensures logs & system reporting)
+          existingHandler?.uncaughtException(paramThread, paramThrowable)
+        }
+        Process.killProcess(Process.myPid())
+        exitProcess(KIWIX_INTERNAL_ERROR)
+      }
+    }
+    lifecycleScope.launch(ioDispatcher) {
+      setIsDebugBuild(BuildConfig.DEBUG)
+      setAppName()
+      setIsBrandedApp()
+      createApplicationShortcuts()
+    }
+
+    intent?.let {
+      readerIntentManager.storePendingIntent(intent)
+    }
+  }
+
+  /**
+   * Set the build type in [KiwixDataStore] so that we can easily test the scenarios based on
+   * build type.
+   *
+   * @see KiwixDataStore.setIsDebugBuild
+   * @see KiwixDataStore.isDebugBuild
+   */
+  private suspend fun setIsDebugBuild(isDebugBuild: Boolean) {
+    kiwixDataStore.setIsDebugBuild(isDebugBuild)
+  }
+
+  /**
+   * Restores the drawer state after an orientation change.
+   *
+   * In Compose, rotating the device (especially on large screens) can cause the drawer
+   * to be automatically opened by default. To provide a consistent user experience,
+   * this function syncs the drawer's state (open/closed) with the last known value
+   * stored in [wasLeftDrawerOpen].
+   */
+  @Composable
+  fun RestoreDrawerStateOnOrientationChange() {
+    LaunchedEffect(LocalConfiguration.current.orientation) {
+      if (wasLeftDrawerOpen) {
+        openNavigationDrawer()
+      } else {
+        closeNavigationDrawer()
+      }
+    }
+  }
+
+  /**
+   * Tracks the current drawer state and updates [wasLeftDrawerOpen] whenever the
+   * drawer is opened or closed. This ensures the drawer state is persisted across
+   * configuration changes (e.g., screen rotations) and can be restored later.
+   */
+  @Composable
+  fun PersistDrawerStateOnChange() {
+    LaunchedEffect(leftDrawerState) {
+      snapshotFlow { leftDrawerState.currentValue }
+        .collect { wasLeftDrawerOpen = it == DrawerValue.Open }
+    }
+  }
+
+  @Suppress("DEPRECATION")
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    activityResultForwarder?.invoke(requestCode, resultCode, data)
+  }
+
+  override fun onStart() {
+    super.onStart()
+    externalLinkOpener.initialize(this, alertDialogShower)
+    rateDialogHandler.checkForRateDialog()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    downloadMonitorServiceManager.startDownloadMonitorServiceIfOngoingDownloads(true)
+    cancelBackgroundTimeoutNotification()
+  }
+
+  override fun onOptionsItemSelected(item: MenuItem): Boolean {
+    if (drawerToggle?.isDrawerIndicatorEnabled == true) {
+      return drawerToggle?.onOptionsItemSelected(item) == true
+    }
+    return super.onOptionsItemSelected(item)
+  }
+
+  fun registerSelectionActionModeListener(listener: WebViewSelectionActionMode?) {
+    selectionActionModeListener = listener
+  }
+
+  override fun onActionModeStarted(mode: ActionMode) {
+    super.onActionModeStarted(mode)
+    selectionActionModeListener?.onActionModeStarted(mode)
+  }
+
+  override fun onActionModeFinished(mode: ActionMode) {
+    super.onActionModeFinished(mode)
+    selectionActionModeListener?.onActionModeFinished(mode)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    this.intent.action = intent.action
+    readerIntentManager.storePendingIntent(intent)
+  }
+
+  override fun onSupportNavigateUp(): Boolean =
+    navController.navigateUp() || super.onSupportNavigateUp()
+
+  fun enableLeftDrawer() {
+    enableLeftDrawer.value = true
+  }
+
+  open fun disableLeftDrawer() {
+    enableLeftDrawer.value = false
+  }
+
+  protected fun openHelpScreen() {
+    handleDrawerOnNavigation()
+    navigate(helpScreenRoute)
+  }
+
+  fun navigationDrawerIsOpen(): Boolean = leftDrawerState.isOpen
+
+  fun closeNavigationDrawer() {
+    uiCoroutineScope.launch {
+      leftDrawerState.close()
+    }
+  }
+
+  fun openNavigationDrawer() {
+    uiCoroutineScope.launch {
+      leftDrawerState.open()
+    }
+  }
+
+  fun openSupportKiwixExternalLink() {
+    closeNavigationDrawer()
+    lifecycleScope.launch {
+      externalLinkOpener.openExternalLinkWithDialog(
+        KIWIX_SUPPORT_URL.toUri().browserIntent(),
+        getString(R.string.support_donation_platform)
+      )
+    }
+  }
+
+  fun navigate(action: NavDirections) {
+    navController.currentDestination?.getAction(action.actionId)?.run {
+      navController.navigate(action)
+    }
+  }
+
+  fun navigate(route: String, navOptions: NavOptions? = null) {
+    navController.navigate(route, navOptions)
+  }
+
+  fun navigate(route: String, builder: NavOptionsBuilder.() -> Unit) {
+    navigate(route, navOptions(builder))
+  }
+
+  private fun openSettings() {
+    handleDrawerOnNavigation()
+    navigate(settingsScreenRoute)
+  }
+
+  private fun openHistory() {
+    handleDrawerOnNavigation()
+    navigate(historyScreenRoute)
+  }
+
+  abstract fun openSearch(
+    searchString: String = "",
+    isOpenedFromTabView: Boolean = false,
+    isVoice: Boolean = false
+  )
+
+  fun openPage(
+    pageUrl: String,
+    zimReaderSource: ZimReaderSource? = null,
+    shouldOpenInNewTab: Boolean = false
+  ) {
+    var zimFileUri = ""
+    if (zimReaderSource != null) {
+      zimFileUri = zimReaderSource.toDatabase()
+    }
+    val navOptions = NavOptions.Builder()
+      .setLaunchSingleTop(true)
+      .setPopUpTo(readerScreenRoute, inclusive = true)
+      .build()
+    // Navigate to reader screen.
+    navigate(readerScreenRoute, navOptions)
+    // Set arguments on current destination(reader).
+    setNavigationResultOnCurrent(zimFileUri, ZIM_FILE_URI_KEY)
+    setNavigationResultOnCurrent(pageUrl, PAGE_URL_KEY)
+    setNavigationResultOnCurrent(shouldOpenInNewTab, SHOULD_OPEN_IN_NEW_TAB)
+  }
+
+  private fun openBookmarks() {
+    handleDrawerOnNavigation()
+    navigate(bookmarksScreenRoute)
+  }
+
+  private fun openNotes() {
+    handleDrawerOnNavigation()
+    navigate(notesScreenRoute)
+  }
+
+  protected fun handleDrawerOnNavigation() {
+    closeNavigationDrawer()
+    disableLeftDrawer()
+  }
+
+  private fun cancelBackgroundTimeoutNotification() {
+    runCatching {
+      val notificationManager =
+        getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      notificationManager?.cancel(DOWNLOAD_TIMEOUT_LIMIT_REACH_NOTIFICATION_ID)
+    }
+  }
+
+  private val bookRelatedDrawerGroup by lazy {
+    DrawerMenuGroup(
+      listOfNotNull(
+        DrawerMenuItem(
+          title = getString(R.string.bookmarks),
+          iconRes = R.drawable.ic_bookmark_black_24dp,
+          visible = true,
+          onClick = { openBookmarks() },
+          testingTag = LEFT_DRAWER_BOOKMARK_ITEM_TESTING_TAG
+        ),
+        DrawerMenuItem(
+          title = getString(R.string.history),
+          iconRes = R.drawable.ic_history_24px,
+          visible = true,
+          onClick = { openHistory() },
+          testingTag = LEFT_DRAWER_HISTORY_ITEM_TESTING_TAG
+        ),
+        DrawerMenuItem(
+          title = getString(R.string.pref_notes),
+          iconRes = R.drawable.ic_add_note,
+          visible = true,
+          onClick = { openNotes() },
+          testingTag = LEFT_DRAWER_NOTES_ITEM_TESTING_TAG
+        ),
+        zimHostDrawerMenuItem
+      )
+    )
+  }
+
+  private val settingDrawerGroup by lazy {
+    DrawerMenuGroup(
+      listOf(
+        DrawerMenuItem(
+          title = getString(R.string.menu_settings),
+          iconRes = R.drawable.ic_settings_24px,
+          visible = true,
+          onClick = { openSettings() },
+          testingTag = LEFT_DRAWER_SETTINGS_ITEM_TESTING_TAG
+        )
+      )
+    )
+  }
+
+  private val helpAndSupportDrawerGroup by lazy {
+    DrawerMenuGroup(
+      listOfNotNull(
+        helpDrawerMenuItem,
+        supportDrawerMenuItem,
+        aboutAppDrawerMenuItem
+      )
+    )
+  }
+
+  /**
+   * Returns the "Wi-Fi Hotspot" menu item in the left drawer.
+   * Currently, this feature is only included in the main Kiwix app.
+   * Custom apps do not include this item.
+   */
+  abstract val zimHostDrawerMenuItem: DrawerMenuItem?
+
+  /**
+   * Returns the "Help" menu item in the left drawer.
+   * In custom apps, this item is hidden.
+   * Each app (main Kiwix or custom) provides its own implementation.
+   */
+  abstract val helpDrawerMenuItem: DrawerMenuItem?
+
+  /**
+   * Returns the "Support" menu item in the left drawer.
+   * In custom apps, this item displays the application name dynamically.
+   * Child activities are responsible for defining this drawer item.
+   */
+  abstract val supportDrawerMenuItem: DrawerMenuItem?
+
+  /**
+   * Returns the "About App" menu item in the left drawer.
+   * For custom apps, this item is shown if configured.
+   * It is not included in the main Kiwix app.
+   * Child activities are responsible for defining this drawer item.
+   */
+  abstract val aboutAppDrawerMenuItem: DrawerMenuItem?
+
+  protected val leftNavigationDrawerMenuItems by lazy {
+    listOf<DrawerMenuGroup>(
+      bookRelatedDrawerGroup,
+      settingDrawerGroup,
+      helpAndSupportDrawerGroup
+    )
+  }
+
+  protected fun createShortcutIcon(
+    @DrawableRes foregroundRes: Int
+  ): IconCompat {
+    val density = resources.displayMetrics.density
+    val sizePx = (ADAPTIVE_ICON_SIZE_DP * density).toInt()
+    val insetPx = ADAPTIVE_ICON_INSET_DP * density
+    val bitmap = createBitmap(sizePx, sizePx)
+    val canvas = Canvas(bitmap)
+
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF5F5F5.toInt() }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      canvas.drawRect(0f, 0f, sizePx.toFloat(), sizePx.toFloat(), bgPaint)
+    } else {
+      val radius = sizePx / 2f
+      canvas.drawCircle(radius, radius, radius, bgPaint)
+    }
+
+    AppCompatResources.getDrawable(this, foregroundRes)?.let { fg ->
+      fg.setBounds(
+        insetPx.toInt(),
+        insetPx.toInt(),
+        sizePx - insetPx.toInt(),
+        sizePx - insetPx.toInt()
+      )
+      fg.draw(canvas)
+    }
+
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      IconCompat.createWithAdaptiveBitmap(bitmap)
+    } else {
+      IconCompat.createWithBitmap(bitmap)
+    }
+  }
+
+  abstract suspend fun createApplicationShortcuts()
+  abstract fun hideBottomAppBar()
+  abstract fun showBottomAppBar()
+
+  /**
+   * Sets the application name for the current activity. This is used in various places such as
+   * the donation page, readerScreen, etc. Child activities should provide the implementation to
+   * set the app name according to their context. For example, in the main Kiwix app,
+   * it will set the app name as "Kiwix", while in branded apps,
+   * it will set the app name as the respective branded app name.
+   */
+  abstract fun setAppName()
+  abstract fun setIsBrandedApp()
+}

@@ -1,0 +1,268 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.webserver.wifi_hotspot
+
+import android.app.Service
+import android.content.Intent
+import android.os.Binder
+import android.os.IBinder
+import android.widget.Toast
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.MainCoroutineDispatcher
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.data.DataSource
+import org.kiwix.kiwixmobile.core.di.IoDispatcher
+import org.kiwix.kiwixmobile.core.di.MainDispatcher
+import org.kiwix.kiwixmobile.core.extensions.registerReceiver
+import org.kiwix.kiwixmobile.core.utils.ServerUtils
+import org.kiwix.kiwixmobile.core.utils.ServerUtils.serverAddress
+import org.kiwix.kiwixmobile.core.zim_manager.fileselect_view.BooksOnDiskListItem.BookOnDisk
+import org.kiwix.kiwixmobile.webserver.RESTART_SERVER
+import org.kiwix.kiwixmobile.webserver.SELECTED_ZIM_PATHS_KEY
+import org.kiwix.kiwixmobile.webserver.WebServerHelper
+import org.kiwix.kiwixmobile.webserver.ZimHostCallbacks
+import java.lang.ref.WeakReference
+import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
+
+/**
+ * HotspotService is used to add a foreground service for the wifi hotspot.
+ * Created by Adeel Zafar on 07/01/2019.
+ */
+@AndroidEntryPoint
+class HotspotService :
+  Service(),
+  IpAddressCallbacks,
+  HotspotStateReceiver.Callback {
+  @set:Inject
+  var webServerHelper: WebServerHelper? = null
+
+  @set:Inject
+  var hotspotNotificationManager: HotspotNotificationManager? = null
+
+  @set:Inject
+  var hotspotStateReceiver: HotspotStateReceiver? = null
+
+  @set:Inject
+  var dataSource: DataSource? = null
+
+  @Inject
+  @IoDispatcher
+  lateinit var ioDispatcher: CoroutineDispatcher
+
+  @Inject
+  @MainDispatcher
+  lateinit var mainDispatcher: MainCoroutineDispatcher
+
+  internal lateinit var serviceScope: CoroutineScope
+
+  private var zimHostCallbacks: ZimHostCallbacks? = null
+  private val serviceBinder: IBinder = HotspotBinder(this)
+
+  internal var currentlyHostedPaths: List<String> = emptyList()
+
+  override fun onCreate() {
+    super.onCreate()
+    serviceScope = CoroutineScope(SupervisorJob() + mainDispatcher)
+    hotspotStateReceiver?.let(::registerReceiver)
+    observeBookRemoved()
+  }
+
+  @OptIn(FlowPreview::class)
+  private fun observeBookRemoved() {
+    serviceScope.launch(ioDispatcher) {
+      dataSource?.bookRemoved()
+        ?.debounce(RESYNC_DEBOUNCE_MS.milliseconds)
+        ?.collect { resyncServerWithRemainingBooks() }
+    }
+  }
+
+  internal suspend fun resyncServerWithRemainingBooks() {
+    val dataSource = dataSource
+    if (!ServerUtils.isServerStarted || dataSource == null) return
+
+    val existingPaths = dataSource
+      .getLanguageCategorizedBooks()
+      .first()
+      .filterIsInstance<BookOnDisk>()
+      .map { it.zimReaderSource.toDatabase() }
+      .toSet()
+    val remainingPaths = currentlyHostedPaths.filter { it in existingPaths }
+
+    if (remainingPaths.size == currentlyHostedPaths.size) return
+
+    if (remainingPaths.isEmpty()) {
+      withContext(mainDispatcher) {
+        Toast
+          .makeText(
+            this@HotspotService,
+            R.string.server_stopped_all_books_deleted_toast_message,
+            Toast.LENGTH_LONG
+          ).show()
+      }
+      stopHotspotAndDismissNotification()
+    } else {
+      startServerAndNotify(
+        ArrayList(remainingPaths),
+        restart = true
+      )
+    }
+  }
+
+  /**
+   * Called when the foreground service is about to reach its timeout limit.
+   *
+   * Starting from Android 15, foreground services can run for only 6 hours per day
+   * in the background unless the user explicitly opens the application again,
+   * which resets this timer.
+   *
+   * To avoid the system killing our service and throwing a
+   * `ForegroundServiceDidNotStopInTimeException`, we proactively stop the
+   * download service here. When the user opens the app again, the download
+   * process will resume normally.
+   *
+   * More details: https://developer.android.com/develop/background-work/services/fgs/timeout
+   */
+  override fun onTimeout(startId: Int, fgsType: Int) {
+    stopHotspotAndDismissNotification()
+    super.onTimeout(startId, fgsType)
+  }
+
+  override fun onDestroy() {
+    hotspotStateReceiver?.let(::unregisterReceiver)
+    super.onDestroy()
+    serviceScope.cancel()
+  }
+
+  @Suppress("NestedBlockDepth")
+  override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
+    when (intent.action) {
+      ACTION_START_SERVER -> {
+        val restartServer = intent.getBooleanExtra(RESTART_SERVER, false)
+        intent.getStringArrayListExtra(SELECTED_ZIM_PATHS_KEY)?.let {
+          serviceScope.launch {
+            startServerAndNotify(
+              it,
+              restart = restartServer
+            )
+          }
+        } ?: kotlin.run { onServerFailedToStart(R.string.no_books_selected_toast_message) }
+      }
+
+      ACTION_STOP_SERVER -> {
+        Toast
+          .makeText(
+            this,
+            R.string.server_stopped_successfully_toast_message,
+            Toast.LENGTH_SHORT
+          ).show()
+        stopHotspotAndDismissNotification()
+      }
+
+      ACTION_CHECK_IP_ADDRESS -> webServerHelper?.pollForValidIpAddress(serviceScope)
+      else -> {}
+    }
+    return START_NOT_STICKY
+  }
+
+  override fun onBind(intent: Intent?): IBinder = serviceBinder
+
+  private suspend fun startServerAndNotify(paths: ArrayList<String>, restart: Boolean) {
+    val serverStatus =
+      withContext(ioDispatcher) {
+        webServerHelper?.startServerHelper(paths, restart)
+      }
+    if (serverStatus?.isServerStarted == true) {
+      currentlyHostedPaths = paths
+      zimHostCallbacks?.onServerStarted(webServerHelper?.getServerAddress().orEmpty())
+      startForegroundNotificationHelper()
+      if (!restart) {
+        Toast
+          .makeText(
+            this@HotspotService,
+            R.string.server_started_successfully_toast_message,
+            Toast.LENGTH_SHORT
+          ).show()
+      }
+    } else {
+      onServerFailedToStart(serverStatus?.errorMessage)
+    }
+  }
+
+  // Dismiss notification and turn off hotspot for devices>=O
+  private fun stopHotspotAndDismissNotification() {
+    webServerHelper?.stopAndroidWebServer()
+    currentlyHostedPaths = emptyList()
+    zimHostCallbacks?.onServerStopped()
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    stopSelf()
+    hotspotStateReceiver = null
+    hotspotNotificationManager?.dismissNotification()
+  }
+
+  private fun onServerFailedToStart(errorMessage: Int?) {
+    zimHostCallbacks?.onServerFailedToStart(errorMessage)
+  }
+
+  fun registerCallBack(myCallback: ZimHostCallbacks?) {
+    zimHostCallbacks = myCallback
+  }
+
+  private fun startForegroundNotificationHelper() {
+    startForeground(
+      HotspotNotificationManager.HOTSPOT_NOTIFICATION_ID,
+      hotspotNotificationManager?.buildForegroundNotification(serverAddress)
+    )
+  }
+
+  override fun onIpAddressValid() {
+    zimHostCallbacks?.onIpAddressValid()
+  }
+
+  override fun onIpAddressInvalid() {
+    zimHostCallbacks?.onIpAddressInvalid()
+  }
+
+  override fun onHotspotDisabled() {
+    stopHotspotAndDismissNotification()
+  }
+
+  class HotspotBinder(hotspotService: HotspotService) : Binder() {
+    val service: WeakReference<HotspotService>
+
+    init {
+      service = WeakReference<HotspotService>(hotspotService)
+    }
+  }
+
+  companion object {
+    const val ACTION_START_SERVER = "start_server"
+    const val ACTION_STOP_SERVER = "stop_server"
+    const val ACTION_CHECK_IP_ADDRESS = "check_ip_address"
+    private const val RESYNC_DEBOUNCE_MS = 300L
+  }
+}

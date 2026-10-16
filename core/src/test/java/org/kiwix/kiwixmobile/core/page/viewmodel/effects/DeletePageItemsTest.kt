@@ -1,0 +1,71 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2020 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.page.viewmodel.effects
+
+import androidx.appcompat.app.AppCompatActivity
+import io.mockk.coVerify
+import io.mockk.mockk
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.RegisterExtension
+import org.kiwix.kiwixmobile.core.dao.PageDao
+import org.kiwix.kiwixmobile.core.page.historyItem
+import org.kiwix.kiwixmobile.core.page.historyState
+import org.kiwix.kiwixmobile.core.reader.ZimReaderSource
+import org.kiwix.sharedFunctions.MainDispatcherRule
+
+@OptIn(ExperimentalCoroutinesApi::class)
+internal class DeletePageItemsTest {
+  @RegisterExtension
+  @JvmField
+  val mainDispatcherRule = MainDispatcherRule()
+  private val pageDao: PageDao = mockk(relaxed = true)
+  val activity: AppCompatActivity = mockk()
+  private val zimReaderSource: ZimReaderSource = mockk()
+  private val item1 = historyItem(zimReaderSource = zimReaderSource)
+  private val item2 = historyItem(zimReaderSource = zimReaderSource)
+
+  @Test
+  fun `delete with selected items only deletes the selected items`() = runTest {
+    item1.isSelected = true
+    DeletePageItems(
+      historyState(listOf(item1, item2)),
+      pageDao,
+      this,
+      mainDispatcherRule.dispatcher
+    ).invokeWith(activity)
+    advanceUntilIdle()
+    coVerify { pageDao.deletePages(listOf(item1), mainDispatcherRule.dispatcher) }
+  }
+
+  @Test
+  fun `delete with no selected items deletes all items`() = runTest {
+    item1.isSelected = false
+    DeletePageItems(
+      historyState(listOf(item1, item2)),
+      pageDao,
+      this,
+      mainDispatcherRule.dispatcher
+    ).invokeWith(activity)
+    advanceUntilIdle()
+    coVerify { pageDao.deletePages(listOf(item1, item2), mainDispatcherRule.dispatcher) }
+  }
+}

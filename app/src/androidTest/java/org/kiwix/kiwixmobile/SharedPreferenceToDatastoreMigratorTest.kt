@@ -1,0 +1,194 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2025 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile
+
+import android.content.Context
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.preference.PreferenceManager
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.kiwix.kiwixmobile.core.utils.TAG_CURRENT_FILE
+import org.kiwix.kiwixmobile.core.utils.TAG_CURRENT_TAB
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore.Companion.KEY_LANGUAGE_ACTIVE
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore.Companion.KEY_LANGUAGE_CODE
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore.Companion.KEY_LANGUAGE_ID
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore.Companion.KEY_OCCURRENCES_OF_LANGUAGE
+import org.kiwix.kiwixmobile.core.utils.datastore.PreferencesKeys
+import org.kiwix.kiwixmobile.core.utils.datastore.SharedPreferenceToDatastoreMigrator
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+
+@HiltAndroidTest
+class SharedPreferenceToDatastoreMigratorTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule
+  @JvmField
+  val tmpFolder = TemporaryFolder()
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity {
+      it.navigate(KiwixDestination.Library.route)
+    }
+  }
+
+  @Test
+  fun testSharedPreferencesAreMigratedToDataStore() = runTest {
+    // PREF_KIWIX_MOBILE
+    val mobilePrefs = context.getSharedPreferences(
+      KiwixDataStore.PREF_KIWIX_MOBILE,
+      Context.MODE_PRIVATE
+    )
+    mobilePrefs
+      .edit()
+      .putString(TAG_CURRENT_FILE, "/sdcard/wiki.zim")
+      .putInt(TAG_CURRENT_TAB, 3)
+      .apply()
+
+    // DEFAULT SharedPreferences (KiwixDataStore)
+    val jsonArray = JSONArray().apply {
+      put(
+        JSONObject().apply {
+          put(KEY_LANGUAGE_CODE, "en")
+          put(KEY_OCCURRENCES_OF_LANGUAGE, 5)
+          put(KEY_LANGUAGE_ACTIVE, true)
+          put(KEY_LANGUAGE_ID, 100L)
+        }
+      )
+    }
+
+    val hostedBooksSet = HashSet<String>().apply {
+      add("Alpine Linux Wiki")
+      add("Wikipedia")
+    }
+
+    val storagePath = "/storage/emulated/0/Kiwix"
+
+    val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
+    defaultPrefs
+      .edit()
+      .putInt(KiwixDataStore.TEXT_ZOOM, 120)
+      .putBoolean(KiwixDataStore.PREF_BACK_TO_TOP, true)
+      .putBoolean(KiwixDataStore.PREF_NEW_TAB_BACKGROUND, false)
+      .putBoolean(KiwixDataStore.PREF_EXTERNAL_LINK_POPUP, true)
+      .putBoolean(KiwixDataStore.PREF_WIFI_ONLY, false)
+      .putString(KiwixDataStore.PREF_THEME, "2")
+      .putBoolean(KiwixDataStore.PREF_SHOW_INTRO, true)
+      .putBoolean(KiwixDataStore.PREF_SHOW_SHOWCASE, false)
+      .putBoolean(KiwixDataStore.PREF_BOOKMARKS_MIGRATED, true)
+      .putBoolean(KiwixDataStore.PREF_RECENT_SEARCH_MIGRATED, true)
+      .putBoolean(KiwixDataStore.PREF_NOTES_MIGRATED, true)
+      .putBoolean(KiwixDataStore.PREF_HISTORY_MIGRATED, true)
+      .putBoolean(KiwixDataStore.PREF_APP_DIRECTORY_TO_PUBLIC_MIGRATED, false)
+      .putBoolean(KiwixDataStore.PREF_BOOK_ON_DISK_MIGRATED, true)
+      .putString(KiwixDataStore.CACHED_LANGUAGE_CODES, jsonArray.toString())
+      .putString(KiwixDataStore.SELECTED_ONLINE_CONTENT_LANGUAGE, "eng")
+      .putString(KiwixDataStore.PREF_LANG, "fr")
+      .putBoolean(KiwixDataStore.PREF_SHOW_HISTORY_ALL_BOOKS, false)
+      .putBoolean(KiwixDataStore.PREF_SHOW_BOOKMARKS_ALL_BOOKS, true)
+      .putBoolean(KiwixDataStore.PREF_SHOW_NOTES_ALL_BOOKS, false)
+      .putStringSet(KiwixDataStore.PREF_HOSTED_BOOKS, hostedBooksSet)
+      .putLong(KiwixDataStore.PREF_LATER_CLICKED_MILLIS, 120L)
+      .putLong(KiwixDataStore.PREF_LAST_DONATION_POPUP_SHOWN_IN_MILLISECONDS, 100L)
+      .putBoolean(KiwixDataStore.PREF_SCAN_FILE_SYSTEM_DIALOG_SHOWN, true)
+      .putBoolean(KiwixDataStore.PREF_MANAGE_EXTERNAL_FILES, true)
+      .putBoolean(KiwixDataStore.PREF_SHOW_STORAGE_OPTION, false)
+      .putBoolean(KiwixDataStore.PREF_SHOW_COPY_MOVE_STORAGE_SELECTION_DIALOG, false)
+      .putString(KiwixDataStore.PREF_STORAGE, storagePath)
+      .putInt(KiwixDataStore.STORAGE_POSITION, 1)
+      .putBoolean(KiwixDataStore.PREF_IS_FIRST_RUN, false)
+      .putBoolean(KiwixDataStore.IS_PLAY_STORE_BUILD, true)
+      .putBoolean(KiwixDataStore.PREF_IS_TEST, true)
+      .apply()
+
+    val testDataStore = PreferenceDataStoreFactory.create(
+      scope = this,
+      migrations = SharedPreferenceToDatastoreMigrator(context).createMigration(),
+      produceFile = { tmpFolder.newFile("test.preferences_pb") }
+    )
+
+    // Test the SharedPreference are successfully migrated to KiwixDataStore.
+    val prefs = testDataStore.data.first()
+
+    // From PREF_KIWIX_MOBILE
+    assertEquals("/sdcard/wiki.zim", prefs[PreferencesKeys.TAG_CURRENT_FILE])
+    assertEquals(3, prefs[PreferencesKeys.TAG_CURRENT_TAB])
+
+    // From DEFAULT prefs
+    assertEquals(120, prefs[PreferencesKeys.TEXT_ZOOM])
+    assertEquals(true, prefs[PreferencesKeys.PREF_BACK_TO_TOP])
+    assertEquals(false, prefs[PreferencesKeys.PREF_NEW_TAB_BACKGROUND])
+    assertEquals(true, prefs[PreferencesKeys.PREF_EXTERNAL_LINK_POPUP])
+    assertEquals(false, prefs[PreferencesKeys.PREF_WIFI_ONLY])
+    assertEquals(true, prefs[PreferencesKeys.PREF_SHOW_INTRO])
+    assertEquals(false, prefs[PreferencesKeys.PREF_SHOW_SHOWCASE])
+    assertEquals(true, prefs[PreferencesKeys.PREF_BOOKMARKS_MIGRATED])
+    assertEquals(true, prefs[PreferencesKeys.PREF_RECENT_SEARCH_MIGRATED])
+    assertEquals(true, prefs[PreferencesKeys.PREF_NOTES_MIGRATED])
+    assertEquals(true, prefs[PreferencesKeys.PREF_HISTORY_MIGRATED])
+    assertEquals(false, prefs[PreferencesKeys.PREF_APP_DIRECTORY_TO_PUBLIC_MIGRATED])
+    assertEquals(true, prefs[PreferencesKeys.PREF_BOOK_ON_DISK_MIGRATED])
+    assertEquals("2", prefs[PreferencesKeys.PREF_THEME])
+
+    // Test cached language migration.
+    val migratedJson = prefs[PreferencesKeys.CACHED_LANGUAGE_CODES]
+    assertNotNull(migratedJson)
+    val migratedArray = JSONArray(migratedJson!!)
+    assertEquals(1, migratedArray.length())
+    val obj = migratedArray.getJSONObject(0)
+    assertEquals("en", obj.getString(KEY_LANGUAGE_CODE))
+    assertEquals(5, obj.getInt(KEY_OCCURRENCES_OF_LANGUAGE))
+    assertEquals(true, obj.getBoolean(KEY_LANGUAGE_ACTIVE))
+    assertEquals(100L, obj.getLong(KEY_LANGUAGE_ID))
+    // End of cached migration.
+    assertEquals("eng", prefs[PreferencesKeys.SELECTED_ONLINE_CONTENT_LANGUAGE])
+    assertEquals("fr", prefs[PreferencesKeys.PREF_LANG])
+    assertEquals(false, prefs[PreferencesKeys.PREF_SHOW_HISTORY_ALL_BOOKS])
+    assertEquals(true, prefs[PreferencesKeys.PREF_SHOW_BOOKMARKS_ALL_BOOKS])
+    assertEquals(false, prefs[PreferencesKeys.PREF_SHOW_NOTES_ALL_BOOKS])
+    assertEquals(hostedBooksSet, prefs[PreferencesKeys.PREF_HOSTED_BOOKS])
+    assertEquals(120L, prefs[PreferencesKeys.PREF_LATER_CLICKED_MILLIS])
+    assertEquals(100L, prefs[PreferencesKeys.PREF_LAST_DONATION_POPUP_SHOWN_IN_MILLISECONDS])
+    assertEquals(true, prefs[PreferencesKeys.PREF_SCAN_FILE_SYSTEM_DIALOG_SHOWN])
+    assertEquals(true, prefs[PreferencesKeys.PREF_MANAGE_EXTERNAL_FILES])
+    assertEquals(false, prefs[PreferencesKeys.PREF_SHOW_STORAGE_OPTION])
+    assertEquals(false, prefs[PreferencesKeys.PREF_SHOW_COPY_MOVE_STORAGE_SELECTION_DIALOG])
+    assertEquals(storagePath, prefs[PreferencesKeys.PREF_STORAGE])
+    assertEquals(1, prefs[PreferencesKeys.STORAGE_POSITION])
+    assertEquals(false, prefs[PreferencesKeys.PREF_IS_FIRST_RUN])
+    assertEquals(true, prefs[PreferencesKeys.IS_PLAY_STORE_BUILD])
+    assertEquals(true, prefs[PreferencesKeys.PREF_IS_TEST])
+  }
+}

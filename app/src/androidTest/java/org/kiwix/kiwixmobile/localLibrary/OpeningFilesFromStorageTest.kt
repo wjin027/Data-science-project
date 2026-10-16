@@ -1,0 +1,260 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.localLibrary
+
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Log
+import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.intent.Intents
+import androidx.test.espresso.intent.Intents.intending
+import androidx.test.espresso.intent.matcher.IntentMatchers.hasAction
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.fail
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.nav.destination.library.local.SELECT_FILE_BUTTON_TESTING_TAG
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST
+import org.kiwix.kiwixmobile.testutils.TestUtils.getZimFileFromResourceFolder
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+
+@HiltAndroidTest
+class OpeningFilesFromStorageTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createComposeRule()
+  private val fileName = "testzim.zim"
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    Intents.init()
+    super.waitForIdle()
+    launchMainActivity()
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun testOpeningFileWithFilePicker() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      composeTestRule.waitForIdle()
+      activityScenario.onActivity {
+        it.navigate(KiwixDestination.Library.route)
+      }
+      composeTestRule.waitForIdle()
+      val uri = copyFileToDownloadsFolder(context, fileName)
+      try {
+        updateKiwixDataStore { setShowStorageSelectionDialogOnCopyMove(true) }
+        intending(hasAction(Intent.ACTION_CHOOSER))
+          .respondWith(
+            Instrumentation.ActivityResult(
+              Activity.RESULT_OK,
+              Intent().setData(uri)
+            )
+          )
+        // open file picker to select a file to test the real scenario.
+        composeTestRule.waitUntil(timeoutMillis = TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          composeTestRule
+            .onNodeWithTag(SELECT_FILE_BUTTON_TESTING_TAG)
+            .isDisplayed()
+        }
+        composeTestRule.onNodeWithTag(SELECT_FILE_BUTTON_TESTING_TAG).performClick()
+        copyMoveFileHandler {
+          assertCopyMoveDialogDisplayed(composeTestRule)
+          clickOnMove(composeTestRule)
+          assertStorageSelectionDialogDisplayed(composeTestRule)
+          clickOnInternalStorage(composeTestRule)
+          assertZimFileCopiedAndShowingIntoTheReader(composeTestRule)
+        }
+      } catch (ignore: Exception) {
+        fail("Could not open file from file manager. Original exception = $ignore")
+      } finally {
+        deleteAllFilesInDirectory(
+          runBlocking { File(kiwixDataStore.selectedStorage.first()) }
+        )
+        deleteZimFileFromDownloadsFolder(uri)
+      }
+    }
+  }
+
+  @Test
+  fun testOpeningFileFromFileManager() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      composeTestRule.waitForIdle()
+      activityScenario.onActivity {
+        it.navigate(KiwixDestination.Library.route)
+      }
+      composeTestRule.waitForIdle()
+      val uri = copyFileToDownloadsFolder(context, fileName)
+      try {
+        updateKiwixDataStore { setShowStorageSelectionDialogOnCopyMove(true) }
+        ActivityScenario.launch<KiwixMainActivity>(createDeepLinkIntent(uri)).onActivity {}
+        composeTestRule.waitForIdle()
+        copyMoveFileHandler {
+          assertCopyMoveDialogDisplayed(composeTestRule)
+          clickOnMove(composeTestRule)
+          assertStorageSelectionDialogDisplayed(composeTestRule)
+          clickOnInternalStorage(composeTestRule)
+          assertZimFileCopiedAndShowingIntoTheReader(composeTestRule)
+        }
+      } catch (ignore: Exception) {
+        fail("Could not open file from file manager. Original exception = $ignore")
+      } finally {
+        deleteAllFilesInDirectory(
+          runBlocking { File(kiwixDataStore.selectedStorage.first()) }
+        )
+        deleteZimFileFromDownloadsFolder(uri)
+      }
+    }
+  }
+
+  @Test
+  fun testOpeningFileFromBrowser() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      testCopyMoveDialogShowing(
+        Uri.parse(
+          "content://com.opera.browser.DownloadProvider/downloads/beer.stackexchange" +
+            ".com_en_all_2023-05.zim?hash=w4A3vMuc7l1FPQwk23rmbgvfPGJfhcj5FujW37NApdA%3D&mt=" +
+            "application%2Foctet-stream"
+        )
+      )
+      testCopyMoveDialogShowing(
+        Uri.parse(
+          "content://org.mozilla.firefox.DownloadProvider/" +
+            "downloads/beer.stackexchange.com_en_all_2023-05.zim"
+        )
+      )
+    }
+  }
+
+  private fun testCopyMoveDialogShowing(uri: Uri) {
+    updateKiwixDataStore { setShowStorageSelectionDialogOnCopyMove(true) }
+    ActivityScenario
+      .launch<KiwixMainActivity>(
+        createDeepLinkIntent(uri)
+      ).onActivity {}
+    copyMoveFileHandler {
+      assertCopyMoveDialogNotDisplayed(composeTestRule)
+    }
+  }
+
+  private fun createDeepLinkIntent(uri: Uri): Intent {
+    val intent =
+      Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/octet-stream")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        setPackage(context.packageName)
+      }
+    return intent
+  }
+
+  // delete the zim file from the downloads folder which we have put in the download folder.
+  // Since after this test case we do not have the access to that file, and that file takes the
+  // memory in device.
+  private fun deleteZimFileFromDownloadsFolder(uri: Uri) {
+    val resolver = context.contentResolver
+    try {
+      val rowsDeleted = resolver.delete(uri, null, null)
+      if (rowsDeleted > 0) {
+        Log.d("FileDeletion", "Deleted: $uri")
+      } else {
+        Log.e("FileDeletion", "Failed to delete: $uri")
+      }
+    } catch (e: Exception) {
+      Log.e("FileDeletion", "Error deleting file: $uri, Error: ${e.message}")
+    }
+  }
+
+  private fun copyFileToDownloadsFolder(
+    context: Context,
+    fileName: String,
+    content: ByteArray = getZimFileFromResourceFolder(context, fileName).readBytes()
+  ): Uri {
+    val contentValues =
+      ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+        put(MediaStore.Downloads.IS_PENDING, 1)
+      }
+
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+      ?: throw FileNotFoundException("Could not write file in Download folder")
+
+    resolver.openOutputStream(uri)?.use {
+      it.write(content)
+    } ?: throw IOException("Could not write content in file")
+
+    contentValues.clear()
+    contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+    resolver.update(uri, contentValues, null, null)
+
+    return uri
+  }
+
+  private fun deleteAllFilesInDirectory(directory: File) {
+    if (directory.isDirectory) {
+      directory.listFiles()?.forEach { file ->
+        if (file.isDirectory) {
+          // Recursively delete files in subdirectories
+          deleteAllFilesInDirectory(file)
+        }
+        file.delete()
+      }
+    }
+  }
+
+  @After
+  fun release() {
+    Intents.release()
+  }
+}
