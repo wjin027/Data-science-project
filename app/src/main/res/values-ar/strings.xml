@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Hamoudak
+* Meno25
+* ديفيد
+-->
+<resources>
+  <string name="file_system_does_not_support_4gb">نظام الملفات الخاص بك لا يدعم الملفات التي تزيد عن ٤ جيجابايت</string>
+  <string name="detecting_file_system">الكشف عن مدي قدرة نظام الملفات علي إنشاء ملفات بحجم ٤ جيجابايت</string>
+  <string name="cannot_open_file">فشل في فتح الملف\nيرجي البحث عنه في مكتبتك</string>
+  <string name="send_files_title">إرسال الملفات</string>
+  <string name="receive_files_title">تلقي الملفات</string>
+  <string name="no_app_found_to_open">لم يتم العثور على تطبيق لتحديد ملف ZIM!</string>
+  <string name="select_zim_file">حدد ملف ZIM للقراءة</string>
+  <string name="swipe_down_to_scan_storage">مرر لأسفل لمسح جهازك للبحث عن كتب جديدة…</string>
+  <string name="auto_detect_books">الكشف التلقائي عن كتبك</string>
+  <string name="auto_detect_books_description">عند التشغيل الأول، سيُطلب منك تمكين التطبيق من فحص مساحة التخزين لديك. إذا سمحت بذلك، فسنكتشف ملفات ZIM تلقائيًا دون الحاجة إلى إضافتها يدويًا.</string>
+  <string name="select_category">اختر الفئة</string>
+  <string name="no_category_available">لا توجد فئات متاحة</string>
+  <string name="your_selected_category">الفئة المختارة:</string>
+  <string name="other_categories">فئات أخرى:</string>
+  <string name="all_categories">جميع الفئات</string>
+  <string name="select_category_content_description">سيؤدي اختيار هذه الفئة إلى إعطاء الأولوية لعرض الكتب القابلة للتنزيل بتلك اللغة في الأعلى.</string>
+</resources>

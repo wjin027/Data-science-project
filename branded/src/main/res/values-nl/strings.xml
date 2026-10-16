@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* HanV
+* Mainframe98
+* McDutchie
+-->
+<resources>
+  <string name="retry">Opnieuw proberen</string>
+  <string name="invalid_installation">Onjuiste installatie. Download een ZIM-bestand. Zorg ervoor dat WiFi aan staat en dat u voldoende opslagruimte hebt.</string>
+</resources>

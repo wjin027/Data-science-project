@@ -1,0 +1,241 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2022 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.note
+
+import android.os.Build
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.internal.runner.junit4.statement.UiThreadStatement
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import leakcanary.LeakAssertions
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.main.CoreMainActivity
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.nav.destination.library.library
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.getZimFileFromResourceFolder
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilTimeout
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import org.kiwix.kiwixmobile.utils.StandardActions
+
+@HiltAndroidTest
+class NoteScreenTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createComposeRule()
+
+  private lateinit var kiwixMainActivity: KiwixMainActivity
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity { kiwixMainActivity = it }
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun verifyNoteScreen() {
+    activityScenario.onActivity {
+      it.navigate(KiwixDestination.Notes.route)
+    }
+    note {
+      assertToolbarExist(composeTestRule)
+      assertSwitchWidgetExist(composeTestRule)
+    }
+  }
+
+  @Test
+  fun testUserCanSeeNotesForDeletedFiles() {
+    deletePreviouslySavedNotes()
+    loadZimFileInReader("testzim.zim")
+    StandardActions.closeDrawer(kiwixMainActivity as CoreMainActivity) // close the drawer if open before running the test cases.
+    note {
+      clickOnNoteMenuItem(composeTestRule)
+      assertNoteDialogDisplayed(composeTestRule)
+      writeDemoNote(composeTestRule)
+      saveNote(composeTestRule)
+      pressBack()
+      openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+      assertToolbarExist(composeTestRule)
+      clickOnSavedNote(composeTestRule)
+      clickOnOpenNote(composeTestRule)
+      assertNoteSaved(composeTestRule)
+      closeAddNoteDialog(composeTestRule)
+    }
+
+    // goto local library fragment to delete the ZIM file
+    UiThreadStatement.runOnUiThread {
+      kiwixMainActivity.navigate(KiwixDestination.Library.route)
+    }
+
+    library {
+      refreshList(composeTestRule)
+      waitUntilZimFilesRefreshing(composeTestRule)
+      deleteZimIfExists(composeTestRule)
+    }
+
+    note {
+      openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+      assertToolbarExist(composeTestRule)
+      clickOnSavedNote(composeTestRule)
+      clickOnOpenNote(composeTestRule)
+      assertNoteSaved(composeTestRule)
+    }
+    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.N_MR1) {
+      // temporary disabled on Android 25
+      LeakAssertions.assertNoLeaks()
+    }
+  }
+
+  @Test
+  fun testZimFileOpenedAfterOpeningNoteOnNotesScreen() {
+    deletePreviouslySavedNotes()
+    loadZimFileInReader("testzim.zim")
+    note {
+      assertHomePageIsLoadedOfTestZimFile()
+      clickOnNoteMenuItem(composeTestRule)
+      assertNoteDialogDisplayed(composeTestRule)
+      writeDemoNote(composeTestRule)
+      saveNote(composeTestRule)
+      closeAddNoteDialog(composeTestRule)
+      openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+      assertToolbarExist(composeTestRule)
+      clickOnSavedNote(composeTestRule)
+      clickOnOpenNote(composeTestRule)
+      assertNoteSaved(composeTestRule)
+    }
+  }
+
+  @Test
+  fun testNoteEntryIsRemovedFromDatabaseWhenDeletedInAddNoteDialog() {
+    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.N_MR1) {
+      deletePreviouslySavedNotes()
+      loadZimFileInReader("testzim.zim")
+      note {
+        clickOnNoteMenuItem(composeTestRule)
+        assertNoteDialogDisplayed(composeTestRule)
+        writeDemoNote(composeTestRule)
+        saveNote(composeTestRule)
+        closeAddNoteDialog(composeTestRule)
+        openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+        assertToolbarExist(composeTestRule)
+        clickOnSavedNote(composeTestRule)
+        clickOnOpenNote(composeTestRule)
+        assertNoteSaved(composeTestRule)
+        clickOnDeleteIcon(composeTestRule)
+        pressBack()
+        assertNoNotesTextDisplayed(composeTestRule)
+      }
+    }
+  }
+
+  @Test
+  fun testNoteFileIsDeletedWhenNoteIsRemovedFromNotesScreen() {
+    deletePreviouslySavedNotes()
+    loadZimFileInReader("testzim.zim")
+    // Save a note.
+    note {
+      clickOnNoteMenuItem(composeTestRule)
+      assertNoteDialogDisplayed(composeTestRule)
+      writeDemoNote(composeTestRule)
+      saveNote(composeTestRule)
+      closeAddNoteDialog(composeTestRule)
+    }
+    // Delete that note from "Note" screen.
+    deletePreviouslySavedNotes()
+    // Test the note file is deleted or not.
+    note {
+      clickOnNoteMenuItem(composeTestRule)
+      assertNoteDialogDisplayed(composeTestRule)
+      assertNotDoesNotExist(composeTestRule)
+      pressBack()
+    }
+  }
+
+  @Test
+  fun testSavedNotePageOpenInReader() {
+    deletePreviouslySavedNotes()
+    loadZimFileInReader("testzim.zim")
+    note {
+      assertHomePageIsLoadedOfTestZimFile()
+      clickOnAndroidArticle(composeTestRule)
+      clickOnNoteMenuItem(composeTestRule)
+      assertNoteDialogDisplayed(composeTestRule)
+      writeDemoNote(composeTestRule)
+      saveNote(composeTestRule)
+      closeAddNoteDialog(composeTestRule)
+      clickOnBackwardButton(composeTestRule)
+      composeTestRule.waitUntilTimeout()
+      openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+      clickOnSavedNote(composeTestRule)
+      clickOnOpenArticle(composeTestRule)
+      assertAndroidArticleLoadedInReader(composeTestRule)
+    }
+  }
+
+  private fun deletePreviouslySavedNotes() {
+    // delete the notes if any saved to properly run the test scenario
+    note {
+      openNoteScreen(kiwixMainActivity as CoreMainActivity, composeTestRule)
+      assertToolbarExist(composeTestRule)
+      clickOnTrashIcon(composeTestRule)
+      assertDeleteNoteDialogDisplayed(composeTestRule)
+      clickOnDeleteButton(composeTestRule)
+      assertNoNotesTextDisplayed(composeTestRule)
+      pressBack()
+    }
+  }
+
+  private fun loadZimFileInReader(zimFileName: String) {
+    val zimFile = getZimFileFromResourceFolder(context, zimFileName)
+    activityScenario.onActivity {
+      kiwixMainActivity = it
+      kiwixMainActivity.navigate(KiwixDestination.Library.route)
+    }
+
+    composeTestRule.runOnUiThread {
+      kiwixMainActivity.openZimFromFilePath(zimFile.absolutePath)
+    }
+
+    composeTestRule.waitForIdle()
+  }
+
+  @After
+  fun finish() {
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+  }
+}

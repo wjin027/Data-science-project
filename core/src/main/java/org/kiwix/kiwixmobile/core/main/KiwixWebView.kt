@@ -1,0 +1,248 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.core.main
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Handler
+import android.os.Looper
+import android.os.Message
+import android.util.AttributeSet
+import android.util.Base64
+import android.view.ContextMenu
+import android.view.ViewGroup
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainCoroutineDispatcher
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.kiwix.kiwixmobile.core.BuildConfig
+import org.kiwix.kiwixmobile.core.CoreApp.Companion.instance
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.di.IoDispatcher
+import org.kiwix.kiwixmobile.core.di.MainDispatcher
+import org.kiwix.kiwixmobile.core.di.modules.userAgent
+import org.kiwix.kiwixmobile.core.extensions.toast
+import org.kiwix.kiwixmobile.core.reader.ZimReaderContainer
+import org.kiwix.kiwixmobile.core.utils.LanguageUtils.Companion.getCurrentLocale
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.kiwixmobile.core.utils.files.FileUtils
+import org.kiwix.kiwixmobile.core.utils.files.Log
+import org.kiwix.kiwixmobile.core.utils.files.SaveResult
+import org.kiwix.videowebview.VideoEnabledWebChromeClient.ToggledFullscreenCallback
+import org.kiwix.videowebview.VideoEnabledWebView
+
+@SuppressLint("ViewConstructor", "SetJavaScriptEnabled")
+@Suppress("LongParameterList")
+open class KiwixWebView constructor(
+  context: Context,
+  private val callback: WebViewCallback,
+  attrs: AttributeSet,
+  videoView: ViewGroup?,
+  private val coreWebViewClient: CoreWebViewClient,
+  val kiwixDataStore: KiwixDataStore,
+  private val zimReaderContainer: ZimReaderContainer,
+  @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+  @param:MainDispatcher private val mainDispatcher: MainCoroutineDispatcher
+) : VideoEnabledWebView(context, attrs) {
+  private var kiwixWebChromeClient: KiwixWebChromeClient? = null
+  private var textZoomJob: Job? = null
+  private var cachedZimFavicon: Bitmap? = null
+
+  val zimFavicon: Bitmap?
+    get() = cachedZimFavicon ?: runCatching {
+      zimReaderContainer.favicon?.let { faviconBase64 ->
+        val decodedString = Base64.decode(faviconBase64, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(decodedString, 0, decodedString.size).also {
+          cachedZimFavicon = it
+        }
+      }
+    }.getOrNull()
+
+  init {
+    if (BuildConfig.DEBUG) {
+      WebView.setWebContentsDebuggingEnabled(true)
+    }
+    // Identify illustration/network requests with the Kiwix user agent, and keep the
+    // current locale appended so it can still be read with navigator.userAgent.
+    settings.apply {
+      userAgentString = "${userAgent(context)} ${getCurrentLocale(context)}"
+      domStorageEnabled = true
+      javaScriptEnabled = true
+      loadWithOverviewMode = true
+      useWideViewPort = true
+      builtInZoomControls = true
+      displayZoomControls = false
+      isHorizontalScrollBarEnabled = true
+      @Suppress("DEPRECATION")
+      allowUniversalAccessFromFileURLs = true
+    }
+    clearCache(true)
+    webViewClient = coreWebViewClient
+    kiwixWebChromeClient =
+      KiwixWebChromeClient(callback, videoView, this).apply {
+        setOnToggledFullscreen(
+          object : ToggledFullscreenCallback {
+            override fun toggledFullscreen(fullscreen: Boolean) {
+              callback.onFullscreenVideoToggled(fullscreen)
+            }
+          }
+        )
+      }
+    webChromeClient = kiwixWebChromeClient
+  }
+
+  override fun performLongClick(): Boolean {
+    val result = hitTestResult
+    if (result.type == HitTestResult.SRC_ANCHOR_TYPE) {
+      result.extra?.let {
+        if (!coreWebViewClient.handleUnsupportedFiles(it)) {
+          callback.webViewLongClick(it)
+        }
+      }
+      return true
+    }
+    return super.performLongClick()
+  }
+
+  override fun onCreateContextMenu(menu: ContextMenu) {
+    super.onCreateContextMenu(menu)
+    val result = hitTestResult
+    if (result.type == HitTestResult.IMAGE_TYPE ||
+      result.type == HitTestResult.SRC_IMAGE_ANCHOR_TYPE
+    ) {
+      val saveMenu =
+        menu.add(0, 1, 0, resources.getString(R.string.save_media))
+      saveMenu.setOnMenuItemClickListener {
+        val msg = SaveHandler(zimReaderContainer, mainDispatcher, ioDispatcher).obtainMessage()
+        requestFocusNodeHref(msg)
+        true
+      }
+    }
+  }
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    // cancel any previous running job.
+    textZoomJob?.cancel()
+    textZoomJob = kiwixDataStore.textZoom
+      .onEach { settings.textZoom = it }
+      .launchIn(CoroutineScope(SupervisorJob() + mainDispatcher))
+  }
+
+  override fun onDetachedFromWindow() {
+    super.onDetachedFromWindow()
+    textZoomJob?.cancel()
+    textZoomJob = null
+  }
+
+  override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+    super.onScrollChanged(l, t, oldl, oldt)
+    val windowHeight = if (measuredHeight > 0) measuredHeight else 1
+    val pages = contentHeight / windowHeight
+    val page = t / windowHeight
+    callback.webViewPageChanged(page, pages)
+  }
+
+  /**
+   * Breaks all reference chains from this WebView back to the callback.
+   * Must be called before [destroy] to prevent memory leaks via
+   * InputMethodManager or DecorView retention of this WebView.
+   */
+  @SuppressLint("MissingOnRenderProcessGone")
+  fun dispose() {
+    // Remove javascript interfaces to break reference chains from JavascriptInjector
+    removeJavascriptInterface("tts")
+    removeJavascriptInterface("DocumentParser")
+    removeJavascriptInterface("_VideoEnabledWebView")
+    // Dispose the chrome client (nulls its view references in parent class)
+    kiwixWebChromeClient?.dispose()
+    kiwixWebChromeClient = null
+    // Reset to no-op clients so any in-flight callbacks are harmlessly dropped
+    webChromeClient = null
+    webViewClient = WebViewClient()
+  }
+
+  class SaveHandler(
+    private val zimReaderContainer: ZimReaderContainer,
+    private val mainDispatcher: MainCoroutineDispatcher,
+    private val ioDispatcher: CoroutineDispatcher
+  ) : Handler(Looper.getMainLooper()) {
+    override fun handleMessage(msg: Message) {
+      val url = msg.data.getString("url", null)
+      val src = msg.data.getString("src", null)
+
+      if (url == null && src == null) return
+
+      val appContext = ContextCompat.getContextForLanguage(instance)
+
+      CoroutineScope(ioDispatcher).launch {
+        val result = FileUtils.downloadFileFromUrl(
+          context = appContext,
+          url = url,
+          src = src,
+          zimReaderContainer = zimReaderContainer
+        )
+
+        withContext(mainDispatcher) {
+          when (result) {
+            is SaveResult.MediaSaved -> {
+              appContext.toast(
+                appContext.getString(
+                  R.string.save_media_saved,
+                  result.displayName
+                )
+              )
+            }
+
+            is SaveResult.FileSaved -> {
+              appContext.toast(
+                appContext.getString(
+                  R.string.save_media_saved,
+                  result.file.absolutePath
+                )
+              )
+            }
+
+            is SaveResult.InvalidSource -> {
+              appContext.toast(
+                appContext.getString(
+                  R.string.invalid_media_source,
+                )
+              )
+            }
+
+            is SaveResult.Error -> {
+              Log.e("MEDIA_SAVE", result.message, result.throwable)
+              appContext.toast(R.string.save_media_error)
+            }
+          }
+        }
+      }
+    }
+  }
+}

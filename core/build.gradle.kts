@@ -1,0 +1,60 @@
+import plugin.KiwixConfigurationPlugin
+
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+    maven { setUrl("https://jitpack.io") }
+  }
+}
+plugins {
+  `android-library`
+}
+plugins.apply(KiwixConfigurationPlugin::class)
+
+android {
+  defaultConfig {
+    buildConfigField("long", "VERSION_CODE", "".getVersionCode().toString())
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+  buildTypes {
+    getByName("release") {
+      isMinifyEnabled = false
+    }
+  }
+}
+
+fun shouldUseLocalVersion() = File(projectDir, "libs").exists()
+
+dependencies {
+  // use jdk8 java.time backport, as long app < Build.VERSION_CODES.O
+  implementation(Libs.threetenabp)
+
+  // Get kiwixlib online if it is not populated locally
+  if (!shouldUseLocalVersion()) {
+    api(Libs.libkiwix)
+  } else {
+    implementation("com.getkeepsafe.relinker:relinker:1.4.5")
+    api(fileTree(mapOf("include" to "*.aar", "dir" to "libs")))
+  }
+
+  // Square
+  implementation(Libs.converter_scalars) {
+    exclude(group = "xpp3", module = "xpp3")
+    exclude(group = "stax", module = "stax-api")
+    exclude(group = "stax", module = "stax")
+  }
+  api(Libs.XMLUTIL_SERIALIZATION)
+  api(Libs.CONVERTER_KOTLINX_SERIALIZATION)
+
+  // Leak canary
+  debugImplementation(Libs.leakcanary_android)
+
+  implementation(Libs.webkit)
+  implementation(Libs.kotlinx_coroutines_android)
+  implementation(Libs.zxing)
+  implementation(Libs.CORE_SPLASH_SCREEN)
+  implementation(Libs.PLAYSTORE_REVIEW_KTX)
+  api(Libs.MEDIA3_SESSION)
+  api(Libs.MEDIA3_COMMON)
+}

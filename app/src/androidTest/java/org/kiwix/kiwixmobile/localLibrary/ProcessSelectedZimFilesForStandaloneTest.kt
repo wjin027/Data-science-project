@@ -1,0 +1,189 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2025 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.localLibrary
+
+import android.net.Uri
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.core.os.LocaleListCompat
+import androidx.hilt.navigation.HiltViewModelFactory
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.nav.destination.library.library
+import org.kiwix.kiwixmobile.nav.destination.library.local.LocalLibraryViewModel
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.getZimFileFromResourceFolder
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilTimeout
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import java.io.File
+
+@HiltAndroidTest
+class ProcessSelectedZimFilesForStandaloneTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createAndroidComposeRule<KiwixMainActivity>()
+  private lateinit var kiwixMainActivity: KiwixMainActivity
+  private lateinit var parentFile: File
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    updateKiwixDataStore {
+      setShowManageExternalFilesPermissionDialog(false)
+      setManageExternalFilesPermissionDialogOnRefresh(false)
+      setIsPlayStoreBuild(false)
+    }
+    composeTestRule.apply {
+      kiwixMainActivity = activity
+      runOnUiThread {
+        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags("en"))
+        parentFile = runBlocking { File(kiwixDataStore.selectedStorage.first()) }
+      }
+      waitForIdle()
+    }
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun testZimFileSelectionForStandaloneApp() {
+    // Test single ZIM file.
+    prepareLocalLibraryForTest()
+    var validZimFile1 = getZimFileFromResourceFolder(context, "testzim.zim")
+    triggerProcessSelectedZimFiles(listOf(Uri.fromFile(validZimFile1)))
+    copyMoveFileHandler { assertZimFileCopiedAndShowingIntoTheReader(composeTestRule) }
+
+    // Test multiple ZIM valid ZIM files.
+    prepareLocalLibraryForTest()
+    validZimFile1 = getZimFileFromResourceFolder(context, "testzim.zim")
+    val validZimFile2 = getZimFileFromResourceFolder(context, "small.zim")
+    var listOfZimFilesUri = listOf(Uri.fromFile(validZimFile1), Uri.fromFile(validZimFile2))
+    triggerProcessSelectedZimFiles(listOfZimFilesUri)
+    copyMoveFileHandler {
+      composeTestRule.apply {
+        // Wait for some time so that ZIM files can properly loaded in library.
+        waitForIdle()
+        waitUntilTimeout()
+        assertZimFileAddedInTheLocalLibrary(composeTestRule)
+      }
+    }
+
+    // Test multiple ZIM files with invalid ZIM file.
+    prepareLocalLibraryForTest()
+    validZimFile1 = getZimFileFromResourceFolder(context, "testzim.zim")
+    val invalidZimUri = getInvalidZimFileUri(".jpg")
+    listOfZimFilesUri = listOf(invalidZimUri, Uri.fromFile(validZimFile1))
+    triggerProcessSelectedZimFiles(listOfZimFilesUri)
+    copyMoveFileHandler {
+      // Test for invalid ZIM file it shows the error dialog.
+      assertFileCopyMoveErrorDialogDisplayed(composeTestRule)
+      clickOnYesButton(composeTestRule)
+      composeTestRule.waitUntilTimeout()
+      assertZimFileAddedInTheLocalLibrary(composeTestRule)
+    }
+  }
+
+  private fun prepareLocalLibraryForTest() {
+    deleteAllFilesInDirectory(parentFile)
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+    navigateToLocalLibraryScreen()
+    deleteZimFilesIfExistInLocalLibrary()
+  }
+
+  private fun triggerProcessSelectedZimFiles(urisList: List<Uri>) {
+    composeTestRule.runOnIdle {
+      kiwixMainActivity = composeTestRule.activity
+      val libraryBackStackEntry =
+        kiwixMainActivity.navController.getBackStackEntry(KiwixDestination.Library.route)
+      val localLibraryViewModel = ViewModelProvider(
+        libraryBackStackEntry,
+        HiltViewModelFactory(kiwixMainActivity, libraryBackStackEntry)
+      )[LocalLibraryViewModel::class.java]
+      kiwixMainActivity.lifecycleScope.launch {
+        localLibraryViewModel.handleSelectedFileUri(urisList)
+      }
+    }
+  }
+
+  private fun navigateToLocalLibraryScreen() {
+    composeTestRule.apply {
+      runOnUiThread {
+        kiwixMainActivity.navigate(KiwixDestination.Library.route)
+      }
+      waitForIdle()
+      waitUntilTimeout() // to properly load the library screen.
+    }
+  }
+
+  private fun deleteZimFilesIfExistInLocalLibrary() {
+    library {
+      refreshList(composeTestRule)
+      waitUntilZimFilesRefreshing(composeTestRule)
+      deleteZimIfExists(composeTestRule)
+    }
+  }
+
+  private fun deleteAllFilesInDirectory(directory: File) {
+    if (directory.isDirectory) {
+      directory.listFiles()?.forEach { file ->
+        if (file.isDirectory) {
+          // Recursively delete files in subdirectories
+          deleteAllFilesInDirectory(file)
+        }
+        file.delete()
+      }
+    }
+  }
+
+  private fun getInvalidZimFileUri(extension: String): Uri {
+    val zimFile = File(context.getExternalFilesDirs(null)[0], "testzim$extension")
+    if (zimFile.exists()) zimFile.delete()
+    zimFile.createNewFile()
+    return Uri.fromFile(zimFile)
+  }
+
+  @After
+  fun finish() {
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+  }
+}

@@ -1,0 +1,515 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2020 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.main
+
+import android.Manifest.permission.READ_EXTERNAL_STORAGE
+import android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+import android.app.NotificationManager
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.view.ActionMode
+import androidx.compose.material3.BottomAppBarDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.os.LocaleListCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavOptions
+import androidx.navigation.compose.rememberNavController
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.MainCoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.kiwix.kiwixmobile.BuildConfig
+import org.kiwix.kiwixmobile.R
+import org.kiwix.kiwixmobile.core.R.drawable
+import org.kiwix.kiwixmobile.core.R.string
+import org.kiwix.kiwixmobile.core.dao.LibkiwixBookOnDisk
+import org.kiwix.kiwixmobile.core.dao.LibkiwixBookmarks
+import org.kiwix.kiwixmobile.core.data.ObjectBoxDataMigrationHandler
+import org.kiwix.kiwixmobile.core.di.MainDispatcher
+import org.kiwix.kiwixmobile.core.downloader.downloadManager.DOWNLOAD_NOTIFICATION_ID
+import org.kiwix.kiwixmobile.core.downloader.downloadManager.DOWNLOAD_NOTIFICATION_TITLE
+import org.kiwix.kiwixmobile.core.downloader.downloadManager.DOWNLOAD_TIMEOUT_RESUME_INTENT
+import org.kiwix.kiwixmobile.core.extensions.ActivityExtensions.setNavigationResultOnCurrent
+import org.kiwix.kiwixmobile.core.extensions.handlePermissionRequest
+import org.kiwix.kiwixmobile.core.extensions.toast
+import org.kiwix.kiwixmobile.core.extensions.update
+import org.kiwix.kiwixmobile.core.main.ACTION_NEW_TAB
+import org.kiwix.kiwixmobile.core.main.CoreMainActivity
+import org.kiwix.kiwixmobile.core.main.DrawerMenuItem
+import org.kiwix.kiwixmobile.core.main.LEFT_DRAWER_HELP_ITEM_TESTING_TAG
+import org.kiwix.kiwixmobile.core.main.LEFT_DRAWER_SUPPORT_ITEM_TESTING_TAG
+import org.kiwix.kiwixmobile.core.main.LEFT_DRAWER_ZIM_HOST_ITEM_TESTING_TAG
+import org.kiwix.kiwixmobile.core.main.NEW_TAB_SHORTCUT_ID
+import org.kiwix.kiwixmobile.core.main.PAGE_URL_KEY
+import org.kiwix.kiwixmobile.core.main.ZIM_FILE_URI_KEY
+import org.kiwix.kiwixmobile.core.main.ZIM_HOST_DEEP_LINK_SCHEME
+import org.kiwix.kiwixmobile.core.reader.ZimFileReader.Companion.CONTENT_PREFIX
+import org.kiwix.kiwixmobile.core.utils.HUNDERED
+import org.kiwix.kiwixmobile.core.utils.StorageDeviceProvider
+import org.kiwix.kiwixmobile.core.utils.dialog.DialogHost
+import org.kiwix.kiwixmobile.nav.destination.library.local.ExternalZimIntentHandler
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
+
+const val ACTION_GET_CONTENT = "GET_CONTENT"
+const val GET_CONTENT_SHORTCUT_ID = "get_content_shortcut"
+
+@AndroidEntryPoint
+class KiwixMainActivity : CoreMainActivity() {
+  private var actionMode: ActionMode? = null
+  override val searchScreenRoute: String = KiwixDestination.Search.route
+
+  @Inject lateinit var libkiwixBookOnDisk: LibkiwixBookOnDisk
+
+  @Inject lateinit var libkiwixBookmarks: LibkiwixBookmarks
+
+  @Inject lateinit var storageDeviceProvider: StorageDeviceProvider
+
+  @Inject lateinit var objectBoxDataMigrationHandler: ObjectBoxDataMigrationHandler
+
+  @Inject
+  @MainDispatcher
+  lateinit var mainDispatcher: MainCoroutineDispatcher
+
+  @Inject
+  lateinit var externalZimIntentHandler: ExternalZimIntentHandler
+  override val appName: String by lazy { getString(R.string.app_name) }
+
+  override val bookmarksScreenRoute: String = KiwixDestination.Bookmarks.route
+  override val settingsScreenRoute: String = KiwixDestination.Settings.route
+  override val historyScreenRoute: String = KiwixDestination.History.route
+  override val notesScreenRoute: String = KiwixDestination.Notes.route
+  override val readerScreenRoute: String = KiwixDestination.Reader.route
+  override val helpScreenRoute: String = KiwixDestination.Help.route
+  override val topLevelDestinationsRoute =
+    setOf(
+      KiwixDestination.Downloads.route,
+      KiwixDestination.Library.route,
+      KiwixDestination.Reader.route
+    )
+
+  private val shouldShowBottomAppBar = mutableStateOf(true)
+
+  private var isIntroScreenVisible: Boolean = false
+
+  private val finishActionModeOnDestinationChange =
+    NavController.OnDestinationChangedListener { _, _, _ ->
+      actionMode?.finish()
+    }
+  private val pendingIntentFlow = MutableStateFlow<Intent?>(null)
+
+  @Suppress("LongMethod")
+  @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    setContent {
+      val pendingIntent by pendingIntentFlow.collectAsState()
+      snackBarHostState = remember { SnackbarHostState() }
+      navController = rememberNavController()
+      val readWritePermission =
+        rememberMultiplePermissionsState(listOf(READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE))
+      LaunchedEffect(Unit) {
+        externalZimIntentHandler.init(this@KiwixMainActivity, lifecycleScope)
+        externalZimIntentHandler.requestReadWritePermission.collect {
+          toast(string.request_storage)
+          readWritePermission.handlePermissionRequest(
+            onGranted = { externalZimIntentHandler.handlePendingUri() },
+            onRationale = externalZimIntentHandler::onReadWriteRationalPermission
+          )
+        }
+      }
+      leftDrawerState = rememberDrawerState(DrawerValue.Closed)
+      uiCoroutineScope = rememberCoroutineScope()
+      bottomAppBarScrollBehaviour = BottomAppBarDefaults.exitAlwaysScrollBehavior()
+      val startDestination = remember {
+        if (runBlocking { kiwixDataStore.showIntro.first() } && !isIntroScreenNotVisible()) {
+          KiwixDestination.Intro.route
+        } else {
+          KiwixDestination.Reader.route
+        }
+      }
+      RestoreDrawerStateOnOrientationChange()
+      PersistDrawerStateOnChange()
+      KiwixMainActivityScreen(
+        navController = navController,
+        leftDrawerContent = leftDrawerMenu,
+        startDestination = startDestination,
+        topLevelDestinationsRoute = topLevelDestinationsRoute,
+        leftDrawerState = leftDrawerState,
+        uiCoroutineScope = uiCoroutineScope,
+        enableLeftDrawer = enableLeftDrawer.value,
+        shouldShowBottomAppBar = shouldShowBottomAppBar.value,
+        bottomAppBarScrollBehaviour = bottomAppBarScrollBehaviour,
+        snackBarHostState = snackBarHostState,
+        appName = appName
+      )
+      LaunchedEffect(Unit) {
+        // Load the menu when UI is attached to screen.
+        leftDrawerMenu.addAll(leftNavigationDrawerMenuItems)
+      }
+      LaunchedEffect(navController) {
+        navController.addOnDestinationChangedListener(finishActionModeOnDestinationChange)
+      }
+      val lifecycle = LocalLifecycleOwner.current.lifecycle
+      LaunchedEffect(navController, pendingIntent) {
+        snapshotFlow { pendingIntent }
+          .filterNotNull()
+          .collectLatest { intent ->
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+              // Wait until Compose view hierarchy is ready
+              delay(HUNDERED.toLong().milliseconds)
+              handleAllIntents(intent)
+              pendingIntentFlow.value = null
+            }
+          }
+      }
+      DialogHost(alertDialogShower)
+    }
+    runMigrations()
+    intent?.let {
+      pendingIntentFlow.value = it
+    }
+  }
+
+  private fun runMigrations() {
+    lifecycleScope.launch {
+      migrateInternalToPublicAppDirectory()
+      migratedToPerAppLanguage()
+    }
+    // run the migration on background thread to avoid any UI related issues.
+    CoroutineScope(ioDispatcher).launch {
+      objectBoxDataMigrationHandler.migrate()
+    }
+  }
+
+  private fun handleAllIntents(newIntent: Intent?) {
+    newIntent?.let { intent ->
+      handleZimFileIntent(intent)
+      handleNotificationIntent(intent)
+      handleGetContentIntent(intent)
+      safelyHandleDeepLink(intent)
+      handleBackgroundTimeoutLimitIntent(intent)
+      handleShortcutIntent(intent)
+    }
+  }
+
+  private fun handleBackgroundTimeoutLimitIntent(intent: Intent?) {
+    if (intent?.hasExtra(DOWNLOAD_TIMEOUT_RESUME_INTENT) == true) {
+      val currentId = navController.currentDestination?.id
+      val targetId = navController.graph.findNode(KiwixDestination.Downloads.route)?.id
+
+      if (currentId != targetId) {
+        navigate(KiwixDestination.Downloads.route) {
+          launchSingleTop = true
+          popUpTo(navController.graph.findStartDestination().id)
+        }
+      }
+    }
+  }
+
+  private fun safelyHandleDeepLink(intent: Intent) {
+    intent.data?.let {
+      navController.handleDeepLink(intent)
+    }
+  }
+
+  private suspend fun migrateInternalToPublicAppDirectory() {
+    if (!kiwixDataStore.isAppDirectoryMigrated.first()) {
+      val storagePath =
+        storageDeviceProvider
+          .getWritableStorage()
+          .getOrNull(kiwixDataStore.selectedStoragePosition.first())
+          ?.name
+      storagePath?.let {
+        kiwixDataStore.setSelectedStorage(kiwixDataStore.getPublicDirectoryPath(it))
+        kiwixDataStore.setAppDirectoryMigrated(true)
+      }
+    }
+  }
+
+  private suspend fun migratedToPerAppLanguage() {
+    if (!kiwixDataStore.perAppLanguageMigrated.first()) {
+      AppCompatDelegate.setApplicationLocales(
+        LocaleListCompat.forLanguageTags(kiwixDataStore.prefLanguage.first())
+      )
+      kiwixDataStore.putPerAppLanguageMigration(true)
+    }
+  }
+
+  override fun onStart() {
+    super.onStart()
+    lifecycleScope.launch {
+      if (!kiwixDataStore.prefIsTest.first()) {
+        kiwixDataStore.setIsPlayStoreBuild(BuildConfig.IS_PLAYSTORE)
+      }
+    }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    externalZimIntentHandler.resumePendingImport()
+  }
+
+  private fun isIntroScreenNotVisible(): Boolean =
+    isIntroScreenVisible.also {
+      isIntroScreenVisible = true
+    }
+
+  override fun onSupportActionModeStarted(mode: ActionMode) {
+    super.onSupportActionModeStarted(mode)
+    actionMode = mode
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    pendingIntentFlow.value = intent
+  }
+
+  private fun handleGetContentIntent(intent: Intent?) {
+    if (intent?.action == ACTION_GET_CONTENT) {
+      navigate(KiwixDestination.Downloads.route) {
+        launchSingleTop = true
+        popUpTo(navController.graph.findStartDestination().id)
+      }
+    }
+  }
+
+  private fun handleZimFileIntent(intent: Intent?) {
+    intent?.data?.let {
+      when (it.scheme) {
+        "file",
+        "content" -> {
+          externalZimIntentHandler.handleIntent(intent)
+        }
+
+        "zim" -> {
+          val zimId = it.host
+          val page = it.encodedPath?.removePrefix("/")
+          if (zimId.isNullOrEmpty() || page.isNullOrEmpty()) {
+            return@handleZimFileIntent toast(R.string.cannot_open_file)
+          }
+          lifecycleScope.launch {
+            val book = libkiwixBookOnDisk.bookById(zimId)
+              ?: return@launch toast(R.string.cannot_open_file)
+            openPage("$CONTENT_PREFIX$page", book.zimReaderSource)
+            clearIntentDataAndAction()
+          }
+        }
+
+        else -> {
+          if (it.scheme != ZIM_HOST_DEEP_LINK_SCHEME) {
+            toast(R.string.cannot_open_file)
+          }
+        }
+      }
+    }
+  }
+
+  private fun handleShortcutIntent(intent: Intent?) {
+    val zimFileUri = intent?.getStringExtra(ZIM_FILE_URI_KEY) ?: return
+    val pageUrl = intent.getStringExtra(PAGE_URL_KEY)
+    openZimFromFilePath(zimFileUri, pageUrl)
+  }
+
+  fun clearIntentDataAndAction() {
+    // if used once then clear it to avoid affecting any other functionality
+    // of the application.
+    intent.action = null
+    intent.data = null
+  }
+
+  private fun handleNotificationIntent(intent: Intent?) {
+    val openFileTitle = intent?.getStringExtra(DOWNLOAD_NOTIFICATION_TITLE) ?: return
+    // Cancel the notification when user taps the "Open" action button
+    val notificationId = intent.getIntExtra(DOWNLOAD_NOTIFICATION_ID, -1)
+    if (notificationId != -1) {
+      val notificationManager =
+        getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+      notificationManager.cancel(notificationId)
+    }
+    lifecycleScope.launch {
+      libkiwixBookOnDisk.bookMatching(openFileTitle)?.let { bookOnDiskEntity ->
+        openZimFromFilePath(bookOnDiskEntity.zimReaderSource.toDatabase())
+      }
+    }
+  }
+
+  fun openZimFromFilePath(path: String, pageUrl: String? = null) {
+    val isAlreadyOnReader =
+      navController.currentDestination?.route == KiwixDestination.Reader.route
+    if (!isAlreadyOnReader) {
+      navigate(KiwixDestination.Reader.route)
+      setNavigationResultOnCurrent(path, ZIM_FILE_URI_KEY)
+      pageUrl?.let { setNavigationResultOnCurrent(it, PAGE_URL_KEY) }
+      return
+    }
+    // If the reader screen is already open. Then emit in readerIntentManager it will handle
+    // this and open the file in reader.
+    readerIntentManager.openZimFileFromPath(path, pageUrl.orEmpty())
+  }
+
+  override val zimHostDrawerMenuItem: DrawerMenuItem? by lazy {
+    DrawerMenuItem(
+      title = getString(string.menu_wifi_hotspot),
+      iconRes = drawable.ic_mobile_screen_share_24px,
+      visible = true,
+      onClick = { openZimHostScreen() },
+      testingTag = LEFT_DRAWER_ZIM_HOST_ITEM_TESTING_TAG
+    )
+  }
+
+  override val helpDrawerMenuItem: DrawerMenuItem? by lazy {
+    DrawerMenuItem(
+      title = getString(string.menu_help),
+      iconRes = drawable.ic_help_24px,
+      visible = true,
+      onClick = { openHelpScreen() },
+      testingTag = LEFT_DRAWER_HELP_ITEM_TESTING_TAG
+    )
+  }
+
+  override val supportDrawerMenuItem: DrawerMenuItem? by lazy {
+    DrawerMenuItem(
+      title = getString(string.menu_support_kiwix),
+      iconRes = drawable.ic_support_24px,
+      visible = true,
+      onClick = { openSupportKiwixExternalLink() },
+      testingTag = LEFT_DRAWER_SUPPORT_ITEM_TESTING_TAG
+    )
+  }
+
+  /**
+   * In kiwix app we are not showing the "About app" item so returning null.
+   */
+  override val aboutAppDrawerMenuItem: DrawerMenuItem? = null
+
+  private fun openZimHostScreen() {
+    disableLeftDrawer()
+    handleDrawerOnNavigation()
+    navigate(KiwixDestination.ZimHost.route)
+  }
+
+  override suspend fun createApplicationShortcuts() {
+    // Remove previously added dynamic shortcuts for old ids if any found.
+    removeOutdatedIdShortcuts()
+    ShortcutManagerCompat.addDynamicShortcuts(this, dynamicShortcutList())
+  }
+
+  override fun openSearch(searchString: String, isOpenedFromTabView: Boolean, isVoice: Boolean) {
+    // Freshly open the search screen.
+    navigate(
+      KiwixDestination.Search.createRoute(
+        searchString = searchString,
+        isOpenedFromTabView = isOpenedFromTabView,
+        isVoice = isVoice
+      ),
+      NavOptions.Builder().setPopUpTo(searchScreenRoute, inclusive = true).build()
+    )
+  }
+
+  override fun hideBottomAppBar() {
+    shouldShowBottomAppBar.update { false }
+  }
+
+  override fun showBottomAppBar() {
+    shouldShowBottomAppBar.update { true }
+  }
+
+  // Outdated shortcut ids(new_tab, get_content)
+// Remove if the application has the outdated shortcuts.
+  private fun removeOutdatedIdShortcuts() {
+    ShortcutManagerCompat.getDynamicShortcuts(this).forEach {
+      if (it.id == "new_tab" || it.id == "get_content") {
+        ShortcutManagerCompat.removeDynamicShortcuts(this, arrayListOf(it.id))
+      }
+    }
+  }
+
+  private fun dynamicShortcutList(): List<ShortcutInfoCompat> {
+    // Create a shortcut for opening the "New tab"
+    val newTabShortcut =
+      ShortcutInfoCompat
+        .Builder(this, NEW_TAB_SHORTCUT_ID)
+        .setShortLabel(getString(string.new_tab_shortcut_label))
+        .setLongLabel(getString(string.new_tab_shortcut_label))
+        .setIcon(createShortcutIcon(drawable.ic_add_blue_24dp))
+        .setDisabledMessage(getString(string.shortcut_disabled_message))
+        .setIntent(
+          Intent(this, KiwixMainActivity::class.java).apply {
+            action = ACTION_NEW_TAB
+          }
+        ).build()
+
+    // create a shortCut for opening the online screen.
+    val getContentShortcut =
+      ShortcutInfoCompat
+        .Builder(this, GET_CONTENT_SHORTCUT_ID)
+        .setShortLabel(getString(string.get_content_shortcut_label))
+        .setLongLabel(getString(string.get_content_shortcut_label))
+        .setIcon(createShortcutIcon(drawable.ic_file_download_blue_24dp))
+        .setDisabledMessage(getString(string.shortcut_disabled_message))
+        .setIntent(
+          Intent(this, KiwixMainActivity::class.java).apply {
+            action = ACTION_GET_CONTENT
+          }
+        ).build()
+
+    return listOf(newTabShortcut, getContentShortcut)
+  }
+
+  override fun setAppName() {
+    lifecycleScope.launch {
+      kiwixDataStore.setAppName(getString(R.string.app_name))
+    }
+  }
+
+  override fun setIsBrandedApp() {
+    lifecycleScope.launch {
+      kiwixDataStore.setIsBrandedApp(false)
+    }
+  }
+}

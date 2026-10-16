@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Authors:
+* Nike
+* Pyscowicz
+* Samoasambia
+-->
+<resources>
+  <string name="file_system_does_not_support_4gb">Tiedostojärjestelmäsi ei tue yli 4 Gt kokoisia tiedostoja</string>
+  <string name="send_files_title">Lähetä tiedostoja</string>
+  <string name="receive_files_title">Vastaanota tiedostoja</string>
+  <string name="select_zim_file">Valitse luettava ZIM-tiedosto</string>
+</resources>

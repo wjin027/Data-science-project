@@ -1,0 +1,145 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2019 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+package org.kiwix.kiwixmobile.language
+
+import android.os.Build
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.test.filters.LargeTest
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import leakcanary.LeakAssertions
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.main.CoreMainActivity
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.download.downloadRobot
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilTimeout
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import org.kiwix.kiwixmobile.utils.StandardActions
+
+@LargeTest
+@HiltAndroidTest
+class LanguageScreenTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createComposeRule()
+
+  lateinit var kiwixMainActivity: KiwixMainActivity
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity {
+      kiwixMainActivity = it
+    }
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun testLanguageScreen() {
+    StandardActions.closeDrawer(kiwixMainActivity as CoreMainActivity) // close the drawer if open before running the test cases.
+    activityScenario.onActivity {
+      kiwixMainActivity = it
+      it.navigate(KiwixDestination.Downloads.route)
+    }
+    downloadRobot {
+      waitForDataToLoad(composeTestRule = composeTestRule)
+    }
+    language {
+      // search and de-select if german language already selected
+      clickOnLanguageIcon(composeTestRule)
+      waitForLanguageToLoad(composeTestRule)
+      // deselect default English if present so German will be the only selected language
+      if (composeTestRule.onAllNodesWithText("English").fetchSemanticsNodes().isNotEmpty()) {
+        selectLanguage(
+          composeTestRule = composeTestRule,
+          matchLanguage = "English"
+        )
+      }
+      searchLanguage(
+        composeTestRule = composeTestRule,
+        searchLanguage = "german"
+      )
+      selectLanguage(
+        composeTestRule = composeTestRule,
+        matchLanguage = "German"
+      )
+      clickOnSaveLanguageIcon(composeTestRule)
+      // test if the selected language filter is applied on the online library or not.
+      downloadRobot {
+        composeTestRule.waitUntilTimeout(TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST)
+        waitForDataToLoad(composeTestRule = composeTestRule)
+        checkLanguageFilterAppliedToOnlineContent(
+          composeTestRule,
+          context.getString(R.string.your_language, "German")
+        )
+      }
+
+      clickOnLanguageIcon(composeTestRule)
+      waitForLanguageToLoad(composeTestRule)
+      // deselect German so Italian will be the only selected language
+      if (composeTestRule.onAllNodesWithText("German").fetchSemanticsNodes().isNotEmpty()) {
+        selectLanguage(
+          composeTestRule = composeTestRule,
+          matchLanguage = "German"
+        )
+      }
+      searchLanguage(
+        composeTestRule = composeTestRule,
+        searchLanguage = "italiano"
+      )
+      selectLanguage(
+        composeTestRule = composeTestRule,
+        matchLanguage = "Italian"
+      )
+      clickOnSaveLanguageIcon(composeTestRule)
+
+      // test if the selected language filter is applied on the online library or not.
+      downloadRobot {
+        composeTestRule.waitUntilTimeout(TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST)
+        waitForDataToLoad(composeTestRule = composeTestRule)
+        checkLanguageFilterAppliedToOnlineContent(
+          composeTestRule,
+          context.getString(R.string.your_language, "Italian")
+        )
+      }
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+      LeakAssertions.assertNoLeaks()
+    }
+  }
+}

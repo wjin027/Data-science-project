@@ -1,0 +1,190 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.reader
+
+import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.core.net.toUri
+import androidx.navigation.NavOptions
+import androidx.test.internal.runner.junit4.statement.UiThreadStatement
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert
+import org.junit.Assert.fail
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.extensions.ActivityExtensions.setNavigationResultOnCurrent
+import org.kiwix.kiwixmobile.core.main.ZIM_FILE_URI_KEY
+import org.kiwix.kiwixmobile.core.reader.ZimFileReader
+import org.kiwix.kiwixmobile.core.reader.ZimReaderSource
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.COMPOSE_TEST_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.RETRY_RULE_ORDER
+import org.kiwix.kiwixmobile.main.KiwixMainActivity
+import org.kiwix.kiwixmobile.page.history.navigationHistory
+import org.kiwix.kiwixmobile.testutils.RetryRule
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.ui.KiwixDestination
+import org.kiwix.libzim.SuggestionSearcher
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
+
+@HiltAndroidTest
+class ZimFileReaderWithSplittedZimFileTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Rule(order = RETRY_RULE_ORDER)
+  @JvmField
+  val retryRule = RetryRule()
+
+  @Rule(order = COMPOSE_TEST_RULE_ORDER)
+  @JvmField
+  val composeTestRule = createComposeRule()
+
+  private lateinit var kiwixMainActivity: KiwixMainActivity
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity()
+    composeTestRule.enableAccessibilityChecks(createAccessibilityValidator())
+  }
+
+  @Test
+  fun testZimFileReaderWithSplittedZimFile() {
+    activityScenario.onActivity {
+      kiwixMainActivity = it
+      kiwixMainActivity.navigate(KiwixDestination.Library.route)
+    }
+    composeTestRule.waitForIdle()
+    createAndGetSplitedZimFile()?.let {
+      UiThreadStatement.runOnUiThread {
+        val navOptions = NavOptions
+          .Builder()
+          .setPopUpTo(KiwixDestination.Reader.route, false)
+          .build()
+        kiwixMainActivity.apply {
+          kiwixMainActivity.navigate(KiwixDestination.Reader.route, navOptions)
+          setNavigationResultOnCurrent(it.toUri().toString(), ZIM_FILE_URI_KEY)
+        }
+      }
+      composeTestRule.waitForIdle()
+      navigationHistory {
+        checkZimFileLoadedSuccessful(composeTestRule)
+        clickOnReaderScreen(composeTestRule) // activate the accessibility check to check the issues.
+        assertZimFileLoaded(composeTestRule) // check if the zim file successfully loaded
+        clickOnAndroidArticle(composeTestRule)
+      }
+    } ?: kotlin.run {
+      // error in creating the zim file chunk
+      fail("Couldn't create the zim file chunk")
+    }
+  }
+
+  @Test
+  fun testWithExtraZeroSizeFile() =
+    runBlocking {
+      createAndGetSplitedZimFile(true)?.let { zimFile ->
+        // test the articleCount and mediaCount of this zim file.
+        val zimReaderSource = ZimReaderSource(zimFile)
+        val archive = zimReaderSource.createArchive(Dispatchers.IO)
+        val zimFileReader =
+          ZimFileReader(
+            zimReaderSource,
+            archive!!,
+            SuggestionSearcher(archive),
+            Dispatchers.IO
+          )
+        Assert.assertEquals(zimFileReader.mediaCount, 16)
+        Assert.assertEquals(zimFileReader.articleCount, 4)
+      } ?: kotlin.run {
+        // error in creating the zim file chunk
+        fail("Couldn't create the zim file chunk")
+      }
+    }
+
+  private fun createAndGetSplitedZimFile(shouldCreateExtraZeroSizeFile: Boolean = false): File? {
+    val zimFileName = "testzim.zim"
+    val loadFileStream =
+      EncodedUrlTest::class.java.classLoader?.getResourceAsStream(zimFileName)
+    require(loadFileStream != null) {
+      "Unable to load the $zimFileName. Please check is it exist in resources folder."
+    }
+    val storageDir = context.getExternalFilesDirs(null)[0]
+
+    // Delete existing parts if they exist
+    (1..3)
+      .asSequence()
+      .map { File(storageDir, "testzim.zima${('a' + it - 1).toChar()}") }
+      .filter(File::exists)
+      .forEach(File::delete)
+
+    // Calculate the size of each part
+    val totalFileSize = loadFileStream.available().toLong()
+    val partSize = totalFileSize / 3 // convert into 3 parts
+    var partNumber = 1
+
+    // Read the input stream in chunks and write to smaller files
+    loadFileStream.use { inputStream ->
+      var bytesRead: Long = 0
+      var currentPartSize: Long = 0
+      val buffer = ByteArray(1024)
+      var length: Int
+      var outputStream: OutputStream? = null
+
+      while (inputStream.read(buffer).also { length = it } > 0) {
+        if (currentPartSize >= partSize || bytesRead == 0L) {
+          outputStream?.close() // Close the previous outputStream if any open.
+          val partFile = File(storageDir, "testzim.zima${('a' + partNumber - 1).toChar()}")
+          outputStream = FileOutputStream(partFile)
+          partNumber++
+          currentPartSize = 0
+        }
+
+        outputStream?.write(buffer, 0, length)
+
+        bytesRead += length
+        currentPartSize += length
+      }
+      outputStream?.close()
+    }
+    if (shouldCreateExtraZeroSizeFile) {
+      File(storageDir, "testzim.zimad").apply {
+        if (exists()) delete() // delete if already exist.
+        createNewFile() // create new zero size file.
+      }
+    }
+    val splittedZimFile = File(storageDir, "testzim.zimaa")
+    return if (splittedZimFile.exists()) splittedZimFile else null
+  }
+
+  @After
+  fun finish() {
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+  }
+}

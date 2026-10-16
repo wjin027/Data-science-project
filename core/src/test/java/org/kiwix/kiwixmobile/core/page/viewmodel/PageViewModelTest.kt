@@ -1,0 +1,216 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2020 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.page.viewmodel
+
+import app.cash.turbine.test
+import io.mockk.clearAllMocks
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.RegisterExtension
+import org.kiwix.kiwixmobile.core.dao.PageDao
+import org.kiwix.kiwixmobile.core.page.PageImpl
+import org.kiwix.kiwixmobile.core.page.adapter.Page
+import org.kiwix.kiwixmobile.core.page.pageState
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.Exit
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.ExitActionModeMenu
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.Filter
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.OnItemClick
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.OnItemLongClick
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.UpdatePages
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.UserClickedDeleteButton
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.UserClickedDeleteSelectedPages
+import org.kiwix.kiwixmobile.core.page.viewmodel.Action.UserClickedShowAllToggle
+import org.kiwix.kiwixmobile.core.page.viewmodel.effects.OpenPage
+import org.kiwix.kiwixmobile.core.reader.ZimReaderContainer
+import org.kiwix.kiwixmobile.core.reader.ZimReaderSource
+import org.kiwix.kiwixmobile.core.search.viewmodel.effects.PopBackstack
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import org.kiwix.sharedFunctions.MainDispatcherRule
+
+@OptIn(ExperimentalCoroutinesApi::class)
+internal class PageViewModelTest {
+  @JvmField
+  @RegisterExtension
+  val mainDispatcherRule = MainDispatcherRule()
+  private val pageDao: PageDao = mockk()
+  private val zimReaderContainer: ZimReaderContainer = mockk()
+  private val kiwixDataStore: KiwixDataStore = mockk()
+
+  private lateinit var viewModel: TestablePageViewModel
+  private val itemsFromDb: MutableSharedFlow<List<Page>> =
+    MutableSharedFlow<List<Page>>(0)
+
+  @BeforeEach
+  fun init() {
+    clearAllMocks()
+    every { zimReaderContainer.id } returns "id"
+    every { zimReaderContainer.name } returns "zimName"
+    coEvery { kiwixDataStore.showHistoryOfAllBooks } returns flowOf(true)
+    every { pageDao.pages() } returns itemsFromDb
+    viewModel = TestablePageViewModel(
+      zimReaderContainer,
+      kiwixDataStore,
+      pageDao,
+      mainDispatcherRule.dispatcher
+    )
+  }
+
+  @Test
+  fun `initial state is Initialising`() = runTest {
+    viewModel.state.test {
+      assertThat(awaitItem()).isEqualTo(pageState())
+    }
+  }
+
+  @Test
+  fun `Exit calls PopBackstack`() = runTest {
+    viewModel.effects.test {
+      viewModel.actions.tryEmit(Exit)
+      assertThat(awaitItem()).isEqualTo(PopBackstack)
+    }
+    viewModel.state.test {
+      assertThat(awaitItem()).isEqualTo(pageState())
+    }
+  }
+
+  @Test
+  fun `ExitActionModeMenu calls deslectAllPages`() = runTest {
+    viewModel.state.test {
+      viewModel.actions.tryEmit(ExitActionModeMenu)
+      assertThat(awaitItem()).isEqualTo(TestablePageState(searchTerm = ""))
+      assertThat(awaitItem())
+        .isEqualTo(TestablePageState(searchTerm = "deselectAllPagesCalled"))
+    }
+  }
+
+  @Test
+  fun `UserClickedShowAllToggle calls offerUpdateToShowAllToggle`() = runTest {
+    viewModel.state.test {
+      viewModel.actions.tryEmit(UserClickedShowAllToggle(true))
+      assertThat(awaitItem()).isEqualTo(TestablePageState(searchTerm = ""))
+      assertThat(awaitItem())
+        .isEqualTo(TestablePageState(searchTerm = "offerUpdateToShowAllToggleCalled"))
+    }
+  }
+
+  @Test
+  fun `UserClickedDeleteButton calls createDeletePageDialogEffect`() = runTest {
+    viewModel.actions.tryEmit(UserClickedDeleteButton)
+    advanceUntilIdle()
+    assertThat(viewModel.createDeletePageDialogEffectCalled).isEqualTo(true)
+  }
+
+  @Test
+  fun `UserClickedDeleteSelectedPages calls createDeletePageDialogEffect`() = runTest {
+    viewModel.actions.tryEmit(UserClickedDeleteSelectedPages)
+    advanceUntilIdle()
+    assertThat(viewModel.createDeletePageDialogEffectCalled).isEqualTo(true)
+  }
+
+  @Test
+  internal fun `OnItemClick selects item if one is selected`() = runTest {
+    val zimReaderSource: ZimReaderSource = mockk()
+    viewModel.state.test {
+      val page = PageImpl(isSelected = true, zimReaderSource = zimReaderSource)
+      viewModel.getMutableStateForTestCases().value = TestablePageState(listOf(page))
+      viewModel.actions.tryEmit(OnItemClick(page))
+      advanceUntilIdle()
+      assertThat(awaitItem()).isEqualTo(TestablePageState())
+      assertThat(awaitItem())
+        .isEqualTo(
+          TestablePageState(
+            listOf(PageImpl(zimReaderSource = zimReaderSource))
+          )
+        )
+    }
+  }
+
+  @Test
+  internal fun `OnItemClick offers OpenPage if none is selected`() = runTest {
+    val zimReaderSource: ZimReaderSource = mockk()
+    viewModel.effects.test {
+      viewModel.getMutableStateForTestCases().value =
+        TestablePageState(listOf(PageImpl(zimReaderSource = zimReaderSource)))
+      viewModel.actions.tryEmit(OnItemClick(PageImpl(zimReaderSource = zimReaderSource)))
+      assertThat(awaitItem()).isEqualTo(
+        OpenPage(
+          PageImpl(zimReaderSource = zimReaderSource),
+          zimReaderContainer
+        )
+      )
+    }
+    viewModel.state.test {
+      viewModel.getMutableStateForTestCases().value =
+        TestablePageState(listOf(PageImpl(zimReaderSource = zimReaderSource)))
+      viewModel.actions.tryEmit(OnItemClick(PageImpl(zimReaderSource = zimReaderSource)))
+      assertThat(awaitItem()).isEqualTo(
+        TestablePageState(listOf(PageImpl(zimReaderSource = zimReaderSource)))
+      )
+    }
+  }
+
+  @Test
+  internal fun `OnItemLongClick selects item if none is selected`() = runTest {
+    val zimReaderSource: ZimReaderSource = mockk()
+    val page = PageImpl(zimReaderSource = zimReaderSource)
+    viewModel.state.test {
+      viewModel.getMutableStateForTestCases().value = TestablePageState(listOf(page))
+      viewModel.actions.tryEmit(OnItemLongClick(page))
+      advanceUntilIdle()
+      assertThat(awaitItem()).isEqualTo(TestablePageState())
+      assertThat(awaitItem()).isEqualTo(
+        TestablePageState(
+          listOf(
+            PageImpl(
+              isSelected = true,
+              zimReaderSource = zimReaderSource
+            )
+          )
+        )
+      )
+    }
+  }
+
+  @Test
+  fun `Filter calls updatePagesBasedOnFilter`() = runTest {
+    viewModel.state.test {
+      viewModel.actions.tryEmit(Filter("Called"))
+      assertThat(awaitItem()).isEqualTo(TestablePageState())
+      assertThat(awaitItem()).isEqualTo(TestablePageState(searchTerm = "updatePagesBasedOnFilterCalled"))
+    }
+  }
+
+  @Test
+  fun `UpdatePages calls updatePages`() = runTest {
+    viewModel.state.test {
+      viewModel.actions.tryEmit(UpdatePages(emptyList()))
+      assertThat(awaitItem()).isEqualTo(TestablePageState())
+      assertThat(awaitItem()).isEqualTo(TestablePageState(searchTerm = "updatePagesCalled"))
+    }
+  }
+}

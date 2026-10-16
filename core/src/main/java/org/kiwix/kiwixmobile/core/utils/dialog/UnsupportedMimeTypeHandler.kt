@@ -1,0 +1,157 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.utils.dialog
+
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import org.kiwix.kiwixmobile.core.R
+import org.kiwix.kiwixmobile.core.di.IoDispatcher
+import org.kiwix.kiwixmobile.core.extensions.isFileExist
+import org.kiwix.kiwixmobile.core.extensions.toast
+import org.kiwix.kiwixmobile.core.reader.ZimReaderContainer
+import org.kiwix.kiwixmobile.core.utils.files.FileUtils
+import org.kiwix.kiwixmobile.core.utils.files.SaveResult
+import java.io.File
+import javax.inject.Inject
+
+class UnsupportedMimeTypeHandler @Inject constructor(
+  private val zimReaderContainer: ZimReaderContainer,
+  @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher
+) {
+  private var alertDialogShower: AlertDialogShower? = null
+  private var activity: Activity? = null
+  var intent: Intent = Intent(Intent.ACTION_VIEW)
+
+  fun initialize(activity: Activity, alertDialogShower: AlertDialogShower) {
+    this.activity = activity
+    this.alertDialogShower = alertDialogShower
+  }
+
+  private fun requireAlertDialogShower() = requireNotNull(alertDialogShower) {
+    "AlertDialogShower is not not. Call UnsupportedMimeTypeHandler.initialize before calling it"
+  }
+
+  private fun requireActivity() = requireNotNull(activity) {
+    "Activity is not not. Call UnsupportedMimeTypeHandler.initialize before calling it"
+  }
+
+  fun showSaveOrOpenUnsupportedFilesDialog(
+    url: String?,
+    documentType: String?,
+    lifecycleScope: CoroutineScope
+  ) {
+    requireAlertDialogShower().show(
+      KiwixDialog.SaveOrOpenUnsupportedFiles,
+      { openOrSaveFile(url, documentType, true, lifecycleScope) },
+      { openOrSaveFile(url, documentType, false, lifecycleScope) },
+      { }
+    )
+  }
+
+  private fun openOrSaveFile(
+    url: String?,
+    documentType: String?,
+    openFile: Boolean,
+    lifecycleScope: CoroutineScope
+  ) {
+    lifecycleScope.launch {
+      val result = FileUtils.downloadFileFromUrl(
+        context = requireActivity(),
+        url = url,
+        src = null,
+        zimReaderContainer = zimReaderContainer
+      )
+
+      when (result) {
+        is SaveResult.FileSaved -> handleFileSaved(result, documentType, openFile)
+
+        is SaveResult.MediaSaved -> handleMediaSaved(result, documentType, openFile)
+
+        is SaveResult.InvalidSource -> {
+          Log.e("MEDIA_SAVE", R.string.invalid_media_source.toString())
+          requireActivity().toast(R.string.invalid_media_source)
+        }
+
+        is SaveResult.Error -> {
+          Log.e("MEDIA_SAVE", result.message, result.throwable)
+          requireActivity().toast(R.string.save_media_error)
+        }
+      }
+    }
+  }
+
+  private suspend fun handleFileSaved(
+    result: SaveResult.FileSaved,
+    documentType: String?,
+    openFile: Boolean
+  ) {
+    if (openFile) {
+      openFile(result.file, documentType)
+    } else {
+      requireActivity().toast(
+        requireActivity().getString(R.string.save_media_saved, result.file.absolutePath)
+      )
+    }
+  }
+
+  private fun handleMediaSaved(
+    result: SaveResult.MediaSaved,
+    documentType: String?,
+    openFile: Boolean
+  ) {
+    if (openFile) {
+      openUri(result.uri, documentType)
+    } else {
+      requireActivity().toast(
+        requireActivity().getString(R.string.save_media_saved, result.displayName)
+      )
+    }
+  }
+
+  private suspend fun openFile(savedFile: File, documentType: String?) {
+    if (!savedFile.isFileExist(ioDispatcher)) return
+    val uri =
+      FileProvider.getUriForFile(
+        requireActivity(),
+        "${requireActivity().packageName}.fileprovider",
+        savedFile
+      )
+    openUri(uri, documentType)
+  }
+
+  private fun openUri(uri: Uri, documentType: String?) {
+    intent.apply {
+      setDataAndType(uri, documentType)
+      flags = Intent.FLAG_ACTIVITY_NO_HISTORY
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    if (intent.resolveActivity(requireActivity().packageManager) != null) {
+      requireActivity().startActivity(intent)
+    } else {
+      requireActivity().toast(R.string.no_reader_application_installed)
+    }
+  }
+}

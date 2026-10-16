@@ -1,0 +1,318 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2020 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.nav.destination.library
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.isNotDisplayed
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import applyWithViewHierarchyPrinting
+import org.kiwix.kiwixmobile.BaseRobot
+import org.kiwix.kiwixmobile.R
+import org.kiwix.kiwixmobile.core.R.string
+import org.kiwix.kiwixmobile.core.page.DELETE_MENU_ICON_TESTING_TAG
+import org.kiwix.kiwixmobile.core.ui.components.CONTENT_LOADING_PROGRESS_BAR_TESTING_TAG
+import org.kiwix.kiwixmobile.core.utils.ZERO
+import org.kiwix.kiwixmobile.core.utils.dialog.ALERT_DIALOG_CONFIRM_BUTTON_TESTING_TAG
+import org.kiwix.kiwixmobile.core.utils.dialog.ALERT_DIALOG_DISMISS_BUTTON_TESTING_TAG
+import org.kiwix.kiwixmobile.core.utils.dialog.ALERT_DIALOG_TITLE_TEXT_TESTING_TAG
+import org.kiwix.kiwixmobile.core.utils.files.Log
+import org.kiwix.kiwixmobile.localFileTransfer.LocalFileTransferRobot
+import org.kiwix.kiwixmobile.localFileTransfer.localFileTransfer
+import org.kiwix.kiwixmobile.main.BOTTOM_NAV_LIBRARY_ITEM_TESTING_TAG
+import org.kiwix.kiwixmobile.main.BOTTOM_NAV_READER_ITEM_TESTING_TAG
+import org.kiwix.kiwixmobile.nav.destination.library.local.BOOK_LIST_TESTING_TAG
+import org.kiwix.kiwixmobile.nav.destination.library.local.LOCAL_FILE_TRANSFER_MENU_BUTTON_TESTING_TAG
+import org.kiwix.kiwixmobile.nav.destination.library.local.NO_FILE_TEXT_TESTING_TAG
+import org.kiwix.kiwixmobile.nav.destination.library.local.SHOW_SWIPE_DOWN_TO_SCAN_FILE_SYSTEM_TEXT_TESTING_TAG
+import org.kiwix.kiwixmobile.nav.destination.library.local.VALIDATE_ZIM_FILES_MENU_BUTTON_TESTING_TAG
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST
+import org.kiwix.kiwixmobile.testutils.TestUtils.refresh
+import org.kiwix.kiwixmobile.testutils.TestUtils.testFlakyView
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilDisplayedWithScrollNudge
+import org.kiwix.kiwixmobile.testutils.TestUtils.waitUntilTimeout
+import org.kiwix.kiwixmobile.ui.BookItemScreen.BOOK_ITEM_TESTING_TAG
+
+fun library(func: LibraryRobot.() -> Unit) = LibraryRobot().applyWithViewHierarchyPrinting(func)
+
+class LibraryRobot : BaseRobot() {
+  private val zimFileTitle = "Test_Zim"
+
+  fun assertGetZimNearbyDeviceDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitForIdle()
+        waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(LOCAL_FILE_TRANSFER_MENU_BUTTON_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(LOCAL_FILE_TRANSFER_MENU_BUTTON_TESTING_TAG).assertIsDisplayed()
+      }
+    })
+  }
+
+  fun clickFileTransferIcon(
+    composeTestRule: ComposeContentTestRule,
+    func: LocalFileTransferRobot.() -> Unit
+  ) {
+    composeTestRule.apply {
+      waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+        onNodeWithTag(LOCAL_FILE_TRANSFER_MENU_BUTTON_TESTING_TAG).isDisplayed()
+      }
+      onNodeWithTag(LOCAL_FILE_TRANSFER_MENU_BUTTON_TESTING_TAG).performClick()
+    }
+    localFileTransfer(func)
+  }
+
+  fun assertLibraryListDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          composeTestRule.onNodeWithTag(BOOK_LIST_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(BOOK_LIST_TESTING_TAG).assertIsDisplayed()
+      }
+    })
+  }
+
+  fun refreshUntilLibraryListDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.waitForIdle()
+      composeTestRule.refresh()
+      waitUntilZimFilesRefreshing(composeTestRule)
+      composeTestRule.waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+        composeTestRule.onNodeWithTag(BOOK_LIST_TESTING_TAG).isDisplayed()
+      }
+      composeTestRule.onNodeWithTag(BOOK_LIST_TESTING_TAG).assertIsDisplayed()
+    })
+  }
+
+  private fun assertNoFilesTextDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag(NO_FILE_TEXT_TESTING_TAG).assertIsDisplayed()
+    })
+  }
+
+  fun refreshList(composeTestRule: ComposeContentTestRule) {
+    try {
+      composeTestRule.waitForIdle()
+      composeTestRule.onNodeWithTag(NO_FILE_TEXT_TESTING_TAG).assertIsDisplayed()
+      composeTestRule.refresh()
+    } catch (_: AssertionError) {
+      try {
+        composeTestRule.onNodeWithTag(BOOK_LIST_TESTING_TAG).assertIsDisplayed()
+        composeTestRule.refresh()
+      } catch (_: AssertionError) {
+        Log.i(
+          "LOCAL_LIBRARY",
+          "No need to refresh the data, since there is no files found"
+        )
+      }
+    }
+  }
+
+  fun waitUntilZimFilesRefreshing(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+        composeTestRule.onNodeWithTag(CONTENT_LOADING_PROGRESS_BAR_TESTING_TAG).isNotDisplayed()
+      }
+      composeTestRule
+        .onNodeWithTag(CONTENT_LOADING_PROGRESS_BAR_TESTING_TAG)
+        .assertIsNotDisplayed()
+    })
+  }
+
+  fun deleteZimIfExists(composeTestRule: ComposeContentTestRule) {
+    try {
+      try {
+        composeTestRule.onNodeWithTag(NO_FILE_TEXT_TESTING_TAG).assertIsDisplayed()
+        // if this view is displaying then we do not need to run the further code.
+        return
+      } catch (_: AssertionError) {
+        Log.e("DELETE_ZIM_FILE", "Zim files found in local library so we are deleting them")
+      }
+      val bookItemList = composeTestRule.onNodeWithTag(BOOK_LIST_TESTING_TAG)
+      val zimFileNodes = composeTestRule.onAllNodesWithTag(BOOK_ITEM_TESTING_TAG)
+      val itemCount = zimFileNodes.fetchSemanticsNodes().size
+      if (itemCount != ZERO) {
+        zimFileNodes[ZERO].performTouchInput { longClick() }
+      }
+      (1 until itemCount).forEach { index ->
+        bookItemList.performScrollToIndex(index)
+        zimFileNodes[index].performClick()
+      }
+      bookItemList.performTouchInput { swipeDown() }
+      clickOnFileDeleteIcon(composeTestRule)
+      clickOnDeleteZimFile(composeTestRule)
+      composeTestRule.waitUntilTimeout()
+      assertNoFilesTextDisplayed(composeTestRule)
+    } catch (e: AssertionError) {
+      Log.i(
+        "TEST_DELETE_ZIM",
+        "Failed to delete ZIM file with title [" + zimFileTitle + "]... " +
+          "Probably because it doesn't exist. \nOriginal Exception = $e"
+      )
+    }
+  }
+
+  private fun clickOnFileDeleteIcon(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntil(TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(DELETE_MENU_ICON_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(DELETE_MENU_ICON_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  private fun clickOnDeleteZimFile(composeTestRule: ComposeContentTestRule) {
+    clickOnDialogConfirmButton(composeTestRule)
+  }
+
+  fun assertScanFileSystemDialogDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitForIdle()
+        waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG)
+          .assertTextEquals(context.getString(string.file_system_scan_dialog_title))
+      }
+    })
+  }
+
+  fun assertScanDialogNotDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitForIdle()
+        onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG).assertIsNotDisplayed()
+      }
+    })
+  }
+
+  fun clickOnDialogConfirmButton(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitForIdle()
+        onNodeWithTag(ALERT_DIALOG_CONFIRM_BUTTON_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  fun assertManageExternalPermissionDialogDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG)
+          .assertTextEquals(context.getString(string.all_files_permission_needed))
+      }
+    })
+  }
+
+  fun clickOnDialogDismissButton(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitForIdle()
+        onNodeWithTag(ALERT_DIALOG_DISMISS_BUTTON_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  fun clickOnReaderScreen(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntilDisplayedWithScrollNudge(BOTTOM_NAV_READER_ITEM_TESTING_TAG)
+        onNodeWithTag(BOTTOM_NAV_READER_ITEM_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  fun clickOnLocalLibraryScreen(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntilDisplayedWithScrollNudge(BOTTOM_NAV_LIBRARY_ITEM_TESTING_TAG)
+        onNodeWithTag(BOTTOM_NAV_LIBRARY_ITEM_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  fun assertShowSwipeDownToScanFileSystemTextDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntilTimeout()
+        onNodeWithTag(SHOW_SWIPE_DOWN_TO_SCAN_FILE_SYSTEM_TEXT_TESTING_TAG)
+          .assertTextEquals(context.getString(R.string.swipe_down_to_scan_storage))
+      }
+    })
+  }
+
+  fun validateZIMFiles(composeTestRule: ComposeContentTestRule) {
+    val zimFileNodes = composeTestRule.onAllNodesWithTag(BOOK_ITEM_TESTING_TAG)
+    val itemCount = zimFileNodes.fetchSemanticsNodes().size
+    repeat(itemCount) { index ->
+      zimFileNodes[index].performTouchInput { longClick() }
+    }
+    clickOnValidateZimFileIcon(composeTestRule)
+    clickOnYesDialogButton(composeTestRule)
+    composeTestRule.waitUntilTimeout()
+    assertZIMFileValidatingDialogDisplayed(composeTestRule)
+    clickOnYesDialogButton(composeTestRule)
+  }
+
+  private fun assertZIMFileValidatingDialogDisplayed(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntil(TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(ALERT_DIALOG_TITLE_TEXT_TESTING_TAG)
+          .assertTextEquals(context.getString(string.validating_zim_file))
+      }
+    })
+  }
+
+  private fun clickOnValidateZimFileIcon(composeTestRule: ComposeContentTestRule) {
+    testFlakyView({
+      composeTestRule.apply {
+        waitUntil(TestUtils.TEST_PAUSE_MS_FOR_DOWNLOAD_TEST) {
+          onNodeWithTag(VALIDATE_ZIM_FILES_MENU_BUTTON_TESTING_TAG).isDisplayed()
+        }
+        onNodeWithTag(VALIDATE_ZIM_FILES_MENU_BUTTON_TESTING_TAG).performClick()
+      }
+    })
+  }
+
+  private fun clickOnYesDialogButton(composeTestRule: ComposeContentTestRule) {
+    clickOnDialogConfirmButton(composeTestRule)
+  }
+}

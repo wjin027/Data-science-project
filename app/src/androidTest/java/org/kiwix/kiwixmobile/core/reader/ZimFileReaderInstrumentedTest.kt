@@ -1,0 +1,189 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2026 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.reader
+
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.kiwix.kiwixmobile.BaseActivityTest
+import org.kiwix.kiwixmobile.core.reader.ZimFileReader.Companion.CONTENT_PREFIX
+import org.kiwix.kiwixmobile.core.search.viewmodel.MAX_SUGGEST_WORD_COUNT
+import org.kiwix.kiwixmobile.core.utils.TestingUtils.HILT_RULE_ORDER
+import org.kiwix.kiwixmobile.testutils.TestUtils
+import org.kiwix.kiwixmobile.testutils.TestUtils.getZimFileFromResourceFolder
+import org.kiwix.libzim.SuggestionSearcher
+import java.io.File
+
+@HiltAndroidTest
+class ZimFileReaderInstrumentedTest : BaseActivityTest() {
+  @Rule(order = HILT_RULE_ORDER)
+  @JvmField
+  val hiltRule = HiltAndroidRule(this)
+
+  @Before
+  override fun waitForIdle() {
+    hiltRule.injectOnce()
+    super.waitForIdle()
+    launchMainActivity()
+  }
+
+  private suspend fun createZimFileReader(): ZimFileReader {
+    val zimFile = getZimFileFromResourceFolder(context, "testzim.zim")
+    val zimReaderSource = ZimReaderSource(zimFile)
+    val archive = zimReaderSource.createArchive(Dispatchers.IO)!!
+    return ZimFileReader(zimReaderSource, archive, SuggestionSearcher(archive), Dispatchers.IO)
+  }
+
+  @Test
+  fun testZimFileReader() {
+    runBlocking {
+      val reader = createZimFileReader()
+
+      // ── Verify all 14 properties with actual expected values ──
+      assertEquals("Test_Zim", reader.title)
+      assertEquals("A/index.html", reader.mainPage)
+      assertEquals("60094d1e-1c9a-a60b-2011-4fb02f8db6c3", reader.id)
+      assertEquals(16, reader.mediaCount)
+      assertEquals(4, reader.articleCount)
+      assertEquals("Wikipedia Contributors", reader.creator)
+      assertEquals("Zimbalaka 1.0", reader.publisher)
+      assertEquals("60094d1e-1c9a-a60b-2011-4fb02f8db6c3", reader.name)
+      assertEquals("2017-04-21", reader.date)
+      assertEquals("Wikipedia article on Test Zim", reader.description)
+      assertEquals("en", reader.language)
+      assertEquals("", reader.tags)
+      assertEquals(348, reader.fileSize)
+      assertNotNull(reader.favicon)
+
+      // ── Verify searchSuggestions and related methods ──
+      assertNotNull(reader.searchSuggestions("android"))
+      assertNotNull(reader.getRandomEntryPath())
+      assertTrue(reader.getSuggestedSpelledWords("test", 5).isEmpty())
+      assertNull(reader.getPageEntryPathFromTitle("ThisTitleDefinitelyDoesNotExistInTestZim12345"))
+
+      // ── Verify getMimeTypeFromUrl ──
+      assertEquals("text/html", reader.getMimeTypeFromUrl("${CONTENT_PREFIX}A/index.html"))
+      assertEquals("text/css", reader.getMimeTypeFromUrl("${CONTENT_PREFIX}-/assets/style1.css"))
+      assertNull(reader.getMimeTypeFromUrl("${CONTENT_PREFIX}A/non_existent_page.html"))
+
+      // ── Verify isRedirect ──
+      assertFalse(reader.isRedirect("http://example.com/test"))
+      assertFalse(reader.isRedirect(""))
+
+      // ── Verify getRedirect ──
+      val redirect = reader.getRedirect("${CONTENT_PREFIX}A/index.html")
+      assertNotNull(redirect)
+      assertTrue(redirect.isNotEmpty())
+
+      // ── Verify load returns content for valid URL ──
+      val inputStream = reader.load("${CONTENT_PREFIX}A/index.html")
+      assertNotNull(inputStream)
+      val content = inputStream?.bufferedReader()?.readText()
+      assertNotNull(content)
+      assertTrue(content!!.isNotEmpty())
+
+      // ── Verify load returns empty content for invalid URL ──
+      val invalidInputStream = reader.load("${CONTENT_PREFIX}A/non_existent_page_12345.html")
+      assertNotNull(invalidInputStream)
+      val invalidContent = invalidInputStream?.bufferedReader()?.readText()
+      assertTrue(invalidContent.isNullOrEmpty())
+
+      // ── Verify getItem ──
+      val item = reader.getItem("${CONTENT_PREFIX}A/index.html")
+      assertNotNull(item)
+      val nullItem = reader.getItem("${CONTENT_PREFIX}A/non_existent_12345.html")
+      assertNull(nullItem)
+
+      // ── Verify prepareSpellingsDB and getSuggestedSpelledWords ──
+      reader.prepareSpellingsDB(reader.jniKiwixReader)
+      val suggestions = reader.getSuggestedSpelledWords("android", MAX_SUGGEST_WORD_COUNT)
+      assertTrue(suggestions.isEmpty())
+
+      // ── Verify toBook maps all fields correctly ──
+      val book = reader.toBook()
+      assertEquals(reader.title, book.title)
+      assertEquals(reader.id, book.id)
+      assertEquals("${reader.fileSize}", book.size)
+      assertEquals(reader.favicon.toString(), book.favicon)
+      assertEquals(reader.creator, book.creator)
+      assertEquals(reader.publisher, book.publisher)
+      assertEquals(reader.date, book.date)
+      assertEquals(reader.description, book.description)
+      assertEquals(reader.language, book.language)
+      assertEquals(reader.articleCount.toString(), book.articleCount)
+      assertEquals(reader.mediaCount.toString(), book.mediaCount)
+      assertEquals(reader.name, book.bookName)
+      assertEquals(reader.tags, book.tags)
+
+      // ── Verify all 14 properties return defaults after dispose ──
+      reader.dispose()
+
+      assertNull(reader.mainPage)
+      assertEquals("No Title Found", reader.title)
+      assertNull(reader.mediaCount)
+      assertNull(reader.articleCount)
+      assertEquals("", reader.creator)
+      assertEquals("", reader.publisher)
+      assertEquals("", reader.date)
+      assertEquals("", reader.description)
+      assertEquals("", reader.language)
+      assertEquals("", reader.tags)
+      assertNull(reader.favicon)
+      assertNull(reader.searchSuggestions("test"))
+      assertNull(reader.getRandomEntryPath())
+      assertNull(reader.getPageEntryPathFromTitle("index"))
+
+      // ── Verify Factory.create with non-existent file ──
+      val factory = ZimFileReader.Factory.Impl(Dispatchers.IO)
+      val nonExistentSource = ZimReaderSource(File("/non/existent/path/fakefile.zim"))
+      assertNull(factory.create(nonExistentSource, false))
+
+      // ── Verify Factory.create with corrupted file ──
+      val corruptedFile = File(context.getExternalFilesDirs(null)[0], "corrupted.zim")
+      if (corruptedFile.exists()) corruptedFile.delete()
+      corruptedFile.createNewFile()
+      corruptedFile.writeBytes(ByteArray(100) { it.toByte() })
+      val corruptedSource = ZimReaderSource(corruptedFile)
+      assertNull(factory.create(corruptedSource, false))
+      corruptedFile.delete()
+
+      // ── Verify Factory.create with valid file ──
+      val validZimFile = getZimFileFromResourceFolder(context, "testzim.zim")
+      val validSource = ZimReaderSource(validZimFile)
+      val validResult = factory.create(validSource, false)
+      assertNotNull(validResult)
+      validResult?.dispose()
+    }
+  }
+
+  @After
+  fun finish() {
+    TestUtils.deleteTemporaryFilesOfTestCases(context)
+  }
+}

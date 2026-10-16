@@ -1,0 +1,95 @@
+/*
+ * Kiwix Android
+ * Copyright (c) 2024 Kiwix <android.kiwix.org>
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package org.kiwix.kiwixmobile.core.utils
+
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.first
+import org.kiwix.kiwixmobile.core.compat.CompatHelper.Companion.getPackageInformation
+import org.kiwix.kiwixmobile.core.dao.LibkiwixBookOnDisk
+import org.kiwix.kiwixmobile.core.utils.datastore.KiwixDataStore
+import javax.inject.Inject
+
+const val THREE_MONTHS_IN_MILLISECONDS = 90 * 24 * 60 * 60 * 1000L
+
+class DonationDialogHandler @Inject constructor(
+  @param:ApplicationContext private val context: Context,
+  private val kiwixDataStore: KiwixDataStore,
+  private val libkiwixBookOnDisk: LibkiwixBookOnDisk
+) {
+  private var showDonationDialogCallback: ShowDonationDialogCallback? = null
+
+  fun setDonationDialogCallBack(showDonationDialogCallback: ShowDonationDialogCallback?) {
+    this.showDonationDialogCallback = showDonationDialogCallback
+  }
+
+  suspend fun attemptToShowDonationPopup() {
+    val currentMilliSeconds = System.currentTimeMillis()
+    val lastPopupMillis = kiwixDataStore.lastDonationPopupShownInMilliSeconds.first()
+
+    val shouldShowPopup =
+      (lastPopupMillis == 0L && shouldShowInitialPopup(currentMilliSeconds)) ||
+        isThreeMonthsElapsed(currentMilliSeconds, lastPopupMillis)
+
+    if (shouldShowPopup &&
+      isZimFilesAvailableInLibrary() &&
+      isTimeToShowDonation(currentMilliSeconds)
+    ) {
+      showDonationDialogCallback?.showDonationDialog()
+      resetDonateLater()
+    }
+  }
+
+  fun shouldShowInitialPopup(currentMillis: Long): Boolean {
+    val appInstallTime =
+      context.packageManager.getPackageInformation(context.packageName, ZERO).firstInstallTime
+    return isThreeMonthsElapsed(currentMillis, appInstallTime)
+  }
+
+  suspend fun isTimeToShowDonation(currentMillis: Long): Boolean {
+    val lastLaterClick = kiwixDataStore.laterClickedMilliSeconds.first()
+    return lastLaterClick == 0L ||
+      isThreeMonthsElapsed(currentMillis, lastLaterClick)
+  }
+
+  fun isThreeMonthsElapsed(currentMilliSeconds: Long, lastPopupMillis: Long): Boolean {
+    if (lastPopupMillis == 0L) return false
+    val timeDifference = currentMilliSeconds - lastPopupMillis
+    return timeDifference >= THREE_MONTHS_IN_MILLISECONDS
+  }
+
+  suspend fun isZimFilesAvailableInLibrary(): Boolean =
+    if (kiwixDataStore.isBrandedApp.first()) true else libkiwixBookOnDisk.getBooks().isNotEmpty()
+
+  suspend fun updateLastDonationPopupShownTime() {
+    kiwixDataStore.setLastDonationPopupShownInMilliSeconds(System.currentTimeMillis())
+  }
+
+  suspend fun donateLater(currentMillis: Long = System.currentTimeMillis()) {
+    kiwixDataStore.setLaterClickedMilliSeconds(currentMillis)
+  }
+
+  suspend fun resetDonateLater() {
+    kiwixDataStore.setLaterClickedMilliSeconds(0L)
+  }
+
+  interface ShowDonationDialogCallback {
+    fun showDonationDialog()
+  }
+}
