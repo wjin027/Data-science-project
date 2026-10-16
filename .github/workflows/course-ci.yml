@@ -26,8 +26,10 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-      - name: Install Android packages
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.3.13750724'
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.3.13750724'
       - name: Build debug APK
         run: ./gradlew --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx4g :app:assembleDebug
       - name: Upload APK
@@ -48,8 +50,10 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-      - name: Install Android packages
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.3.13750724'
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.3.13750724'
       - name: Run core and app unit tests
         run: ./gradlew --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx4g :core:testDebugUnitTest :app:testDebugUnitTest
       - name: Upload test reports
